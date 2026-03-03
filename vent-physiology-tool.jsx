@@ -48,6 +48,12 @@ const GLOSSARY = {
   "ARDS": { full: "Acute Respiratory Distress Syndrome", detail: "Acute hypoxemic respiratory failure with bilateral opacities not fully explained by cardiac failure." },
   "SBT": { full: "Spontaneous Breathing Trial", detail: "Test of patient's ability to breathe with minimal or no vent support. Used to assess extubation readiness." },
   "ETT": { full: "Endotracheal Tube", detail: "Tube placed in trachea for mechanical ventilation." },
+  "PaCO₂": { full: "Partial Pressure of Arterial CO₂", detail: "Normal 35-45 mmHg. Reflects adequacy of ventilation (minute ventilation)." },
+  "PaO₂": { full: "Partial Pressure of Arterial O₂", detail: "Normal 80-100 mmHg on room air. Reflects oxygenation." },
+  "SpO₂": { full: "Peripheral Oxygen Saturation", detail: "Pulse oximetry reading. Target 92-96% in most ventilated patients." },
+  "SIMV": { full: "Synchronized Intermittent Mandatory Ventilation", detail: "Mode delivering set mandatory breaths synchronized to patient effort; spontaneous breaths receive PS only." },
+  "SAT": { full: "Spontaneous Awakening Trial", detail: "Protocolized daily sedation hold to assess wakefulness. Paired with SBT to reduce vent days." },
+  "PE": { full: "Pulmonary Embolism", detail: "Blood clot in pulmonary vasculature. Common cause of unexplained tachypnea and hypoxemia." },
 };
 
 // ─── Active Tooltip Context (singleton — only one tooltip open at a time) ───
@@ -720,8 +726,8 @@ function ModuleBasics() {
 
   const setting = indications[initIndication];
 
-  const sectionKeys = ["why", "anatomy", "modes", "settings", "safety"];
-  const sectionLabels = { why: "Why Ventilate?", anatomy: "Breath Cycle", modes: "Modes", settings: "Initial Settings", safety: "Safety & Alarms" };
+  const sectionKeys = ["why", "anatomy", "modes", "settings", "safety", "board"];
+  const sectionLabels = { why: "Why Ventilate?", anatomy: "Breath Cycle", modes: "Modes", settings: "Initial Settings", safety: "Safety & Alarms", board: "Board Essentials" };
 
   return (
     <div>
@@ -1033,6 +1039,70 @@ function ModuleBasics() {
 
           <Callout type="success">
             <strong>You now know:</strong> pressure, flow, volume, the breath cycle, modes, initial settings, safety targets, and troubleshooting. You're ready for the advanced modules which build directly on these concepts.
+          </Callout>
+        </div>
+      )}
+
+      {/* ── BOARD ESSENTIALS ── */}
+      {section === "board" && (
+        <div>
+          <p style={bStyles.p}>Goal-oriented adjustments for the most common board-style ventilator questions. "The gas is abnormal — what do I change?"</p>
+
+          <div style={bStyles.box}>
+            <div style={bStyles.boxTitle}>🎛️ Vent Adjustment Cheat Sheet</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}>
+
+              {/* Card A — CO₂ Too High */}
+              <div style={{ ...bStyles.miniCard, borderColor: COLORS.red + "44" }}>
+                <div style={{ color: COLORS.red, fontWeight: 700, fontSize: 13, marginBottom: 6 }}>CO₂ Too High (Respiratory Acidosis)</div>
+                <div style={{ fontSize: 11, color: COLORS.textDim, lineHeight: 1.6, marginBottom: 6 }}>
+                  <strong style={{ color: COLORS.text }}>Goal:</strong> ↓ <Term abbr="PaCO₂">PaCO₂</Term> → increase minute ventilation
+                </div>
+                <div style={{ fontSize: 11, color: COLORS.green, lineHeight: 1.6, marginBottom: 6 }}>
+                  <strong>Actions:</strong> ↑ <Term abbr="RR">RR</Term> or ↑ <Term abbr="Vt">Vt</Term> (volume mode: set directly; pressure mode: ↑ inspiratory pressure to increase delivered <Term abbr="Vt">Vt</Term>)
+                </div>
+                <div style={{ fontSize: 11, color: COLORS.yellow, lineHeight: 1.6 }}>
+                  <strong>⚠ Warnings:</strong> (1) High <Term abbr="RR">RR</Term> risks auto-PEEP → ↓ venous return → hypotension. (2) In <Term abbr="ARDS">ARDS</Term>, tolerate pH down to ~7.20 rather than exceeding lung-protective <Term abbr="Vt">Vt</Term> (permissive hypercapnia).
+                </div>
+              </div>
+
+              {/* Card B — CO₂ Too Low */}
+              <div style={{ ...bStyles.miniCard, borderColor: COLORS.purple + "44" }}>
+                <div style={{ color: COLORS.purple, fontWeight: 700, fontSize: 13, marginBottom: 6 }}>CO₂ Too Low (Respiratory Alkalosis)</div>
+                <div style={{ fontSize: 11, color: COLORS.textDim, lineHeight: 1.6, marginBottom: 6 }}>
+                  <strong style={{ color: COLORS.text }}>Goal:</strong> ↑ <Term abbr="PaCO₂">PaCO₂</Term> → decrease minute ventilation
+                </div>
+                <div style={{ fontSize: 11, color: COLORS.green, lineHeight: 1.6, marginBottom: 6 }}>
+                  <strong>Actions:</strong> ↓ <Term abbr="RR">RR</Term> or ↓ <Term abbr="Vt">Vt</Term>
+                </div>
+                <div style={{ fontSize: 11, color: COLORS.yellow, lineHeight: 1.6 }}>
+                  <strong>⚠ Warning:</strong> If the patient triggers above the set rate, lowering the set <Term abbr="RR">RR</Term> won't help — the patient is driving. Find the cause: sepsis, <Term abbr="PE">PE</Term>, hepatic failure, pain.
+                </div>
+              </div>
+
+              {/* Card C — O₂ Too Low */}
+              <div style={{ ...bStyles.miniCard, borderColor: COLORS.orange + "44" }}>
+                <div style={{ color: COLORS.orange, fontWeight: 700, fontSize: 13, marginBottom: 6 }}>O₂ Too Low (Hypoxemia)</div>
+                <div style={{ fontSize: 11, color: COLORS.textDim, lineHeight: 1.6, marginBottom: 6 }}>
+                  <strong style={{ color: COLORS.text }}>Goal:</strong> ↑ <Term abbr="SpO₂">SpO₂</Term> / <Term abbr="PaO₂">PaO₂</Term>
+                </div>
+                <div style={{ fontSize: 11, color: COLORS.green, lineHeight: 1.6, marginBottom: 6 }}>
+                  <strong>Actions:</strong> ↑ <Term abbr="FiO₂">FiO₂</Term> or ↑ <Term abbr="PEEP">PEEP</Term>
+                </div>
+                <div style={{ fontSize: 11, color: COLORS.yellow, lineHeight: 1.6 }}>
+                  <strong>⚠ Warning:</strong> <Term abbr="PEEP">PEEP</Term> ↑ can ↓ preload → ↓ cardiac output → tissue O₂ delivery may worsen even as <Term abbr="SpO₂">SpO₂</Term> improves. If BP drops after <Term abbr="PEEP">PEEP</Term> increase, consider volume.
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          <Callout type="info">
+            <strong>Ready to Extubate?</strong> Criteria to consider: <Term abbr="SpO₂">SpO₂</Term> {">"}90% on <Term abbr="FiO₂">FiO₂</Term> ≤0.5, <Term abbr="PEEP">PEEP</Term> ≤5, pH {">"}7.30, and underlying cause improving. Best practice: pair daily <Term abbr="SAT">SAT</Term> (spontaneous awakening trial — hold sedation) with <Term abbr="SBT">SBT</Term> (spontaneous breathing trial — minimal vent support). This <Term abbr="SAT">SAT</Term>+<Term abbr="SBT">SBT</Term> combination reduces vent days, ICU stay, and 1-year mortality.
+          </Callout>
+
+          <Callout type="warn">
+            <strong style={{ color: COLORS.red }}>Board Trap: <Term abbr="SIMV">SIMV</Term> is not a weaning strategy.</strong> <Term abbr="SIMV">SIMV</Term> as a liberation mode is inferior to daily <Term abbr="SBT">SBT</Term>-based protocols — evidence consistently shows longer time on the vent. If a question asks best weaning approach → daily paired <Term abbr="SAT">SAT</Term> + <Term abbr="SBT">SBT</Term>.
           </Callout>
         </div>
       )}
