@@ -575,24 +575,30 @@ function Term({ abbr, full, detail, children }) {
   const [show, setShow] = useState(false);
   const [flipBelow, setFlipBelow] = useState(false);
   const [animating, setAnimating] = useState(false);
+  const [tooltipPos, setTooltipPos] = useState({ left: 0, top: 0, bottom: 0 });
   const wrapperRef = useRef(null);
   const hoverTimer = useRef(null);
   const isOpen = activeId === myId && show;
 
-  // Position check: flip below if within 80px of viewport top
-  const updateFlip = useCallback(() => {
+  // Capture wrapper position for fixed tooltip placement
+  const updatePosition = useCallback(() => {
     if (!wrapperRef.current) return;
     const rect = wrapperRef.current.getBoundingClientRect();
+    setTooltipPos({
+      left: rect.left + rect.width / 2,
+      top: rect.top,
+      bottom: rect.bottom,
+    });
     setFlipBelow(rect.top < 80);
   }, []);
 
   const open = useCallback(() => {
-    updateFlip();
+    updatePosition();
     setAnimating(true);
     setShow(true);
     setActiveId(myId);
     setTimeout(() => setAnimating(false), 150);
-  }, [myId, setActiveId, updateFlip]);
+  }, [myId, setActiveId, updatePosition]);
 
   const close = useCallback(() => {
     setShow(false);
@@ -641,12 +647,13 @@ function Term({ abbr, full, detail, children }) {
 
   const arrowSize = 6;
   const tooltipStyle = {
-    position: "absolute",
-    left: "50%",
+    position: "fixed",
+    left: tooltipPos.left,
     transform: `translateX(-50%) translateY(${animating ? (flipBelow ? "4px" : "-4px") : "0"})`,
     ...(flipBelow
-      ? { top: "100%", marginTop: arrowSize + 2 }
-      : { bottom: "100%", marginBottom: arrowSize + 2 }),
+      ? { top: tooltipPos.bottom + arrowSize + 2 }
+      : { bottom: window.innerHeight - tooltipPos.top + arrowSize + 2 }),
+    width: "min(280px, 90vw)",
     maxWidth: "min(280px, 90vw)",
     background: "#1e293b",
     border: "1px solid #334155",
@@ -677,7 +684,7 @@ function Term({ abbr, full, detail, children }) {
   return (
     <span
       ref={wrapperRef}
-      style={{ position: "relative", display: "inline" }}
+      style={{ display: "inline" }}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       onClick={handleClick}
