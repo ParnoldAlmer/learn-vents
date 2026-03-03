@@ -187,6 +187,156 @@ function generateVolumeWave(params) {
   return points;
 }
 
+// ─── P-V Loop Generator ───
+const PV_SCENARIOS = {
+  normal: { label: "Normal", crs: 60, rrs: 8, alpha: 0.05, beta: 0.05, color: COLORS.green },
+  earlyArds: { label: "Early ARDS", crs: 25, rrs: 12, alpha: 0.15, beta: 0.35, color: COLORS.red },
+  fibroproliferative: { label: "Late Fibroprolif.", crs: 20, rrs: 10, alpha: 0.4, beta: 0.05, color: COLORS.purple },
+  copd: { label: "COPD", crs: 80, rrs: 22, alpha: 0.05, beta: 0.05, color: COLORS.orange },
+};
+
+function generatePVLoop({ peep, vt, crs, rrs, peakFlow = 60, alpha, beta }) {
+  const insp = [];
+  const exp = [];
+  const steps = 120;
+  const flowLps = peakFlow / 60; // L/min → L/s
+
+  // Effective compliance at volume v (mL), returns mL/cmH₂O
+  const cEff = (v) => {
+    const frac = v / vt;
+    return Math.max(5, crs * (1 - alpha * frac * frac + beta * frac));
+  };
+
+  // Shared elastic pressure via cumulative integration of dv/C_eff(v)
+  // Precompute a lookup table so both limbs use identical elastic pressure
+  const elasticSteps = 200;
+  const elasticTable = new Float64Array(elasticSteps + 1); // elasticTable[i] = elastic P at v = (i/N)*vt
+  elasticTable[0] = 0;
+  for (let i = 1; i <= elasticSteps; i++) {
+    const v = (i / elasticSteps) * vt;
+    const dv = vt / elasticSteps;
+    elasticTable[i] = elasticTable[i - 1] + dv / cEff(v);
+  }
+  const elasticP = (v) => {
+    const idx = Math.min(elasticSteps, Math.max(0, (v / vt) * elasticSteps));
+    const lo = Math.floor(idx), hi = Math.min(elasticSteps, lo + 1);
+    const t = idx - lo;
+    return elasticTable[lo] * (1 - t) + elasticTable[hi] * t;
+  };
+
+  // ── Inspiration: constant flow, V from 0 → Vt ──
+  // P = PEEP + elastic(V) + R × V̇  (V̇ > 0, resistive adds pressure)
+  for (let i = 0; i <= steps; i++) {
+    const v = (i / steps) * vt;
+    const p = peep + elasticP(v) + rrs * flowLps;
+    insp.push({ p, v });
+  }
+
+  // ── Expiration: passive decay, V from Vt → 0 ──
+  // V(t) = Vt × e^(−t/τ), V̇(t) = −V(t)/τ  (flow is negative)
+  // P = PEEP + elastic(V) + R × V̇ = PEEP + elastic(V) − R × V/(τ×1000)
+  // The negative resistive term pulls pressure LEFT of the static curve → creates the loop
+  const tauS = (crs / 1000) * rrs; // time constant in seconds
+  for (let i = 0; i <= steps; i++) {
+    const frac = i / steps;
+    const v = vt * Math.exp(-4 * frac);
+    if (v < 0.5) { exp.push({ p: peep, v: 0 }); break; } // close loop at origin
+    const flowExp = -(v / 1000) / tauS; // L/s, negative
+    const p = peep + elasticP(v) + rrs * flowExp;
+    exp.push({ p, v });
+  }
+  // Ensure final point closes at (PEEP, 0)
+  if (exp.length === 0 || exp[exp.length - 1].v > 0) {
+    exp.push({ p: peep, v: 0 });
+  }
+
+  // Loop area via trapezoidal rule (hysteresis = area between the two curves)
+  // Integrate P·dV for each limb; loop area = insp integral − exp integral
+  let areaInsp = 0;
+  for (let i = 1; i < insp.length; i++) {
+    areaInsp += 0.5 * (insp[i].p + insp[i - 1].p) * (insp[i].v - insp[i - 1].v);
+  }
+  let areaExp = 0;
+  for (let i = 1; i < exp.length; i++) {
+    areaExp += 0.5 * (exp[i].p + exp[i - 1].p) * (exp[i].v - exp[i - 1].v);
+  }
+  const loopArea = Math.abs(areaInsp - areaExp);
+
+  // Dynamic compliance: slope of mid-portion of inspiratory limb
+  const mid = Math.floor(steps * 0.3);
+  const top = Math.floor(steps * 0.7);
+  const dynC = (insp[top].v - insp[mid].v) / (insp[top].p - insp[mid].p);
+
+  return { insp, exp, loopArea, dynC };
+}
+
+// ─── Breath Animation Hook ───
+function useBreathAnimation(rr) {
+  const [phase, setPhase] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const rafRef = useRef(null);
+  const lastRef = useRef(null);
+
+  useEffect(() => {
+    if (!playing) { rafRef.current && cancelAnimationFrame(rafRef.current); return; }
+    const breathDuration = (60 / rr) * 1000; // ms
+    const tick = (now) => {
+      if (document.hidden) { rafRef.current = requestAnimationFrame(tick); return; }
+      if (!lastRef.current) lastRef.current = now;
+      const dt = now - lastRef.current;
+      lastRef.current = now;
+      setPhase(prev => {
+        const next = prev + dt / breathDuration;
+        return next >= 1 ? next - 1 : next;
+      });
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    const onVis = () => { if (document.hidden) lastRef.current = null; };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { cancelAnimationFrame(rafRef.current); document.removeEventListener("visibilitychange", onVis); lastRef.current = null; };
+  }, [playing, rr]);
+
+  return { breathPhase: phase, isPlaying: playing, toggle: () => setPlaying(p => !p) };
+}
+
+// ─── Deterministic Acini Generator ───
+function generateAcini(n) {
+  const acini = [];
+  // Simple seeded LCG for deterministic jitter
+  let seed = 42;
+  const rand = () => { seed = (seed * 1664525 + 1013904223) & 0x7fffffff; return seed / 0x7fffffff; };
+  for (let i = 0; i < n; i++) {
+    const base = (i / n) * 28;
+    const jitter = (rand() - 0.5) * (28 / n) * 0.8;
+    acini.push({ id: i, pcrit: Math.max(0, Math.min(28, base + jitter)), row: Math.floor(i / 10), col: i % 10 });
+  }
+  return acini;
+}
+
+// ─── Acinar State Computation (plain function — NOT memoized, called per frame) ───
+function getAcinarStates(acini, peep, vt, crs, breathPhase) {
+  // Simplified sinusoidal breath: pressure rises during insp (phase 0–0.4), falls during exp (0.4–1)
+  const inspFrac = 0.4;
+  const pPlateau = peep + vt / crs;
+  let paw;
+  if (breathPhase < inspFrac) {
+    paw = peep + (pPlateau - peep) * Math.sin((breathPhase / inspFrac) * Math.PI * 0.5);
+  } else {
+    const expPhase = (breathPhase - inspFrac) / (1 - inspFrac);
+    paw = peep + (pPlateau - peep) * Math.cos(expPhase * Math.PI * 0.5);
+  }
+
+  let recruited = 0, transitional = 0, derecruited = 0;
+  const states = acini.map(a => {
+    if (a.pcrit <= peep) { recruited++; return { ...a, state: "recruited" }; }
+    if (a.pcrit > pPlateau) { derecruited++; return { ...a, state: "derecruited" }; }
+    transitional++;
+    return { ...a, state: paw >= a.pcrit ? "transitional-open" : "transitional-closed" };
+  });
+  return { states, recruited, transitional, derecruited, paw, pPlateau };
+}
+
 // ─── Canvas Waveform Component ───
 function WaveformCanvas({ data, yLabel, yMin, yMax, color, aspectRatio = 0.27, annotations, zeroLine }) {
   const containerRef = useRef(null);
@@ -1347,6 +1497,554 @@ function ModuleTimeConstant() {
   );
 }
 
+// Module 8: Dynamic P-V Loops
+function ModulePVLoops() {
+  const isMobile = useIsMobile();
+  const [peep, setPeep] = useState(5);
+  const [vt, setVt] = useState(450);
+  const [crs, setCrs] = useState(50);
+  const [rrs, setRrs] = useState(10);
+  const [alpha, setAlpha] = useState(0.1);
+  const [beta, setBeta] = useState(0.1);
+  const [activeScenario, setActiveScenario] = useState(null);
+
+  const applyScenario = (key) => {
+    const s = PV_SCENARIOS[key];
+    setCrs(s.crs); setRrs(s.rrs); setAlpha(s.alpha); setBeta(s.beta);
+    setActiveScenario(key);
+  };
+
+  const pvData = useMemo(() => generatePVLoop({ peep, vt, crs, rrs, alpha, beta }), [peep, vt, crs, rrs, alpha, beta]);
+
+  const containerRef = useRef(null);
+  const canvasRef = useRef(null);
+  const cw = useContainerWidth(containerRef);
+  const ch = Math.max(180, Math.round(cw * 0.55));
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || cw < 10) return;
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = cw * dpr;
+    canvas.height = ch * dpr;
+    canvas.style.width = cw + "px";
+    canvas.style.height = ch + "px";
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, cw, ch);
+    drawGrid(ctx, cw, ch);
+
+    const fs = Math.max(9, Math.round(cw * 0.022));
+    const padL = fs * 4, padR = fs * 2, padT = fs * 2, padB = fs * 3;
+    const plotW = cw - padL - padR;
+    const plotH = ch - padT - padB;
+
+    // Determine axis ranges
+    const allP = [...pvData.insp.map(d => d.p), ...pvData.exp.map(d => d.p)];
+    const pMin = Math.floor(Math.min(...allP) - 2);
+    const pMax = Math.ceil(Math.max(...allP) + 2);
+    const vMin = 0;
+    const vMax = vt + 50;
+
+    const mapP = (p) => padL + ((p - pMin) / (pMax - pMin)) * plotW;
+    const mapV = (v) => padT + plotH - ((v - vMin) / (vMax - vMin)) * plotH;
+
+    // Axis labels
+    ctx.fillStyle = COLORS.textDim;
+    ctx.font = `${fs}px 'JetBrains Mono', monospace`;
+    ctx.textAlign = "center";
+    ctx.fillText("Paw (cmH₂O)", cw / 2, ch - fs * 0.5);
+    ctx.save();
+    ctx.translate(fs, ch / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText("Volume (mL)", 0, 0);
+    ctx.restore();
+
+    // Y-axis ticks
+    ctx.textAlign = "right";
+    ctx.font = `${Math.max(8, fs - 1)}px 'JetBrains Mono', monospace`;
+    ctx.fillStyle = COLORS.textMuted;
+    for (let i = 0; i <= 4; i++) {
+      const val = vMin + (vMax - vMin) * (i / 4);
+      ctx.fillText(Math.round(val), padL - 3, mapV(val) + fs * 0.35);
+    }
+    // X-axis ticks
+    ctx.textAlign = "center";
+    for (let i = 0; i <= 4; i++) {
+      const val = pMin + (pMax - pMin) * (i / 4);
+      ctx.fillText(Math.round(val), mapP(val), ch - padB + fs * 1.3);
+    }
+
+    // Filled loop area (subtle)
+    ctx.globalAlpha = 0.08;
+    ctx.fillStyle = COLORS.accent;
+    ctx.beginPath();
+    pvData.insp.forEach((d, i) => { const x = mapP(d.p), y = mapV(d.v); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+    [...pvData.exp].reverse().forEach((d) => { ctx.lineTo(mapP(d.p), mapV(d.v)); });
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // Inspiration limb (solid)
+    ctx.strokeStyle = COLORS.accent;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    pvData.insp.forEach((d, i) => { const x = mapP(d.p), y = mapV(d.v); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+    ctx.stroke();
+
+    // Expiration limb (dashed)
+    ctx.strokeStyle = COLORS.orange;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    pvData.exp.forEach((d, i) => { const x = mapP(d.p), y = mapV(d.v); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Dynamic compliance slope line
+    const mid = Math.floor(pvData.insp.length * 0.3);
+    const top = Math.floor(pvData.insp.length * 0.7);
+    ctx.strokeStyle = COLORS.yellow;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(mapP(pvData.insp[mid].p), mapV(pvData.insp[mid].v));
+    ctx.lineTo(mapP(pvData.insp[top].p), mapV(pvData.insp[top].v));
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Arrow labels
+    ctx.font = `bold ${fs}px 'JetBrains Mono', monospace`;
+    ctx.fillStyle = COLORS.accent;
+    ctx.textAlign = "left";
+    ctx.fillText("← Insp", mapP(pvData.insp[Math.floor(pvData.insp.length * 0.5)].p) + 4, mapV(pvData.insp[Math.floor(pvData.insp.length * 0.5)].v) - 6);
+    ctx.fillStyle = COLORS.orange;
+    ctx.fillText("Exp →", mapP(pvData.exp[Math.floor(pvData.exp.length * 0.5)].p) - fs * 4, mapV(pvData.exp[Math.floor(pvData.exp.length * 0.5)].v) + fs + 4);
+
+    // UIP annotation
+    if (alpha > 0.2) {
+      const uipIdx = Math.floor(pvData.insp.length * 0.85);
+      const d = pvData.insp[uipIdx];
+      ctx.fillStyle = COLORS.red;
+      ctx.font = `bold ${fs}px 'JetBrains Mono', monospace`;
+      ctx.textAlign = "right";
+      ctx.fillText("UIP ↗", mapP(d.p) - 4, mapV(d.v) + 2);
+    }
+    // LIP annotation
+    if (beta > 0.2) {
+      const lipIdx = Math.floor(pvData.insp.length * 0.15);
+      const d = pvData.insp[lipIdx];
+      ctx.fillStyle = COLORS.green;
+      ctx.font = `bold ${fs}px 'JetBrains Mono', monospace`;
+      ctx.textAlign = "left";
+      ctx.fillText("LIP ↗", mapP(d.p) + 4, mapV(d.v) + fs + 2);
+    }
+  }, [pvData, cw, ch, vt, alpha, beta]);
+
+  return (
+    <div>
+      <h3 style={{ color: COLORS.text, fontSize: 16, fontWeight: 700, margin: "0 0 4px", fontFamily: "'Space Grotesk', sans-serif" }}>
+        Dynamic P-V Loops
+      </h3>
+      <p style={{ fontSize: 12, color: COLORS.textDim, lineHeight: 1.6, margin: "0 0 10px" }}>
+        The pressure-volume loop during a tidal breath reveals hysteresis (loop area), overdistension (UIP flattening at high volume), and recruitment (LIP concavity at low volume). Changing <Term abbr="PEEP">PEEP</Term> shifts the operating window along the P-V curve.
+      </p>
+      <EqBox>C<sub>eff</sub>(V) = C<sub>RS</sub> × (1 − α(V/Vt)² + β(V/Vt))</EqBox>
+
+      {/* Clinical Scenario Presets */}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "10px 0" }}>
+        {Object.entries(PV_SCENARIOS).map(([key, s]) => (
+          <button key={key} onClick={() => applyScenario(key)} style={{
+            padding: "5px 12px", borderRadius: 6, fontSize: 11,
+            border: `1px solid ${activeScenario === key ? s.color : COLORS.cardBorder}`,
+            background: activeScenario === key ? `${s.color}22` : "transparent",
+            color: activeScenario === key ? s.color : COLORS.textDim,
+            cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", fontWeight: activeScenario === key ? 700 : 400,
+          }}>{s.label}</button>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12, margin: "8px 0" }}>
+        <div>
+          <Slider label="PEEP" value={peep} min={0} max={20} step={1} onChange={v => { setPeep(v); setActiveScenario(null); }} unit=" cmH₂O" color={COLORS.green} />
+          <Slider label="Vt" value={vt} min={200} max={700} step={10} onChange={v => { setVt(v); setActiveScenario(null); }} unit=" mL" color={COLORS.accent} />
+          <Slider label="C_RS" value={crs} min={15} max={100} step={5} onChange={v => { setCrs(v); setActiveScenario(null); }} unit=" mL/cmH₂O" color={COLORS.green} />
+        </div>
+        <div>
+          <Slider label="R_RS" value={rrs} min={5} max={30} step={1} onChange={v => { setRrs(v); setActiveScenario(null); }} unit=" cmH₂O/L/s" color={COLORS.red} />
+          <Slider label="Overdistension (α)" value={alpha} min={0} max={0.5} step={0.05} onChange={v => { setAlpha(v); setActiveScenario(null); }} unit="" color={COLORS.red} />
+          <Slider label="Recruitment (β)" value={beta} min={0} max={0.5} step={0.05} onChange={v => { setBeta(v); setActiveScenario(null); }} unit="" color={COLORS.green} />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "8px 0" }}>
+        <Metric label="Loop Area" value={pvData.loopArea.toFixed(0)} unit="mL·cmH₂O" color={COLORS.orange} />
+        <Metric label="Dyn C" value={pvData.dynC.toFixed(0)} unit="mL/cmH₂O" color={COLORS.yellow} />
+        <Metric label="PEEP" value={peep} unit="cmH₂O" color={COLORS.green} />
+      </div>
+
+      {alpha > 0.2 && beta > 0.2 && <Callout type="warn"><strong>Simultaneous high recruitment and overdistension is uncommon</strong> — in clinical practice, typically one process dominates. Consider using the clinical scenario presets above for realistic combinations.</Callout>}
+      {alpha > 0.3 && <Callout type="danger">High overdistension (α {'>'} 0.3) — note the flattening at high volumes (UIP). Consider reducing <Term abbr="Vt">Vt</Term> or <Term abbr="PEEP">PEEP</Term>.</Callout>}
+      {beta > 0.3 && <Callout type="info">Significant recruitment (β {'>'} 0.3) — note the concavity at low volumes (LIP). Consider increasing <Term abbr="PEEP">PEEP</Term> to keep the lung open.</Callout>}
+
+      <div ref={containerRef} style={{ width: "100%", marginTop: 8 }}>
+        <canvas ref={canvasRef} style={{ display: "block", borderRadius: 8, background: "#0d1117", border: `1px solid ${COLORS.cardBorder}` }} />
+      </div>
+
+      <div style={{ display: "flex", gap: 12, marginTop: 8, fontSize: 11, color: COLORS.textDim, fontFamily: "'JetBrains Mono', monospace" }}>
+        <span><span style={{ color: COLORS.accent }}>━━</span> Inspiration</span>
+        <span><span style={{ color: COLORS.orange }}>╌╌</span> Expiration</span>
+        <span><span style={{ color: COLORS.yellow }}>╌╌</span> Dyn Compliance</span>
+      </div>
+    </div>
+  );
+}
+
+// Module 9: Acinar Recruitment Animation
+function ModuleRecruitment() {
+  const isMobile = useIsMobile();
+  const [peep, setPeep] = useState(8);
+  const [vt, setVt] = useState(450);
+  const [rr, setRr] = useState(14);
+  const crs = 30; // fixed ARDS-range compliance
+
+  const acini = useMemo(() => generateAcini(100), []);
+  const { breathPhase, isPlaying, toggle } = useBreathAnimation(rr);
+
+  const { states, recruited, transitional, derecruited, paw, pPlateau } = getAcinarStates(acini, peep, vt, crs, breathPhase);
+
+  const containerRef = useRef(null);
+  const canvasRef = useRef(null);
+  const cw = useContainerWidth(containerRef);
+  const gridSize = Math.min(cw, 400);
+  const cellSize = gridSize / 10;
+
+  const stateColors = {
+    recruited: COLORS.green,
+    "transitional-open": COLORS.yellow,
+    "transitional-closed": "#78350f",
+    derecruited: "#334155",
+  };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || gridSize < 10) return;
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = gridSize * dpr;
+    canvas.height = gridSize * dpr;
+    canvas.style.width = gridSize + "px";
+    canvas.style.height = gridSize + "px";
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, gridSize, gridSize);
+
+    // Background
+    ctx.fillStyle = "#0d1117";
+    ctx.fillRect(0, 0, gridSize, gridSize);
+
+    const r = cellSize * 0.38;
+    states.forEach(a => {
+      const cx = a.col * cellSize + cellSize / 2;
+      const cy = a.row * cellSize + cellSize / 2;
+
+      // Glow for open acini
+      if (a.state === "recruited" || a.state === "transitional-open") {
+        ctx.beginPath();
+        ctx.arc(cx, cy, r * 1.4, 0, Math.PI * 2);
+        ctx.fillStyle = (a.state === "recruited" ? COLORS.green : COLORS.yellow) + "15";
+        ctx.fill();
+      }
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = stateColors[a.state];
+      ctx.fill();
+
+      // Border
+      ctx.strokeStyle = "#1e293b";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    });
+
+    // Breath phase indicator bar at bottom
+    const barY = gridSize - 4;
+    ctx.fillStyle = "#1e293b";
+    ctx.fillRect(0, barY, gridSize, 4);
+    const inspFrac = 0.4;
+    const barColor = breathPhase < inspFrac ? COLORS.accent : COLORS.orange;
+    ctx.fillStyle = barColor;
+    ctx.fillRect(0, barY, gridSize * breathPhase, 4);
+  }, [states, gridSize, cellSize, breathPhase]);
+
+  return (
+    <div>
+      <h3 style={{ color: COLORS.text, fontSize: 16, fontWeight: 700, margin: "0 0 4px", fontFamily: "'Space Grotesk', sans-serif" }}>
+        Acinar Recruitment & Derecruitment
+      </h3>
+      <p style={{ fontSize: 12, color: COLORS.textDim, lineHeight: 1.6, margin: "0 0 10px" }}>
+        Each circle represents an acinus with its own critical opening pressure. Watch how <Term abbr="PEEP">PEEP</Term> and <Term abbr="Vt">Vt</Term> determine which acini stay open, which cycle open/shut (atelectrauma risk), and which never participate.
+      </p>
+      <EqBox>RDC<sub>n</sub> = T<sub>rec</sub> / T<sub>tot</sub> &nbsp;|&nbsp; % Recruited(P) = 3.43 × P + 7.6</EqBox>
+
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12, margin: "10px 0" }}>
+        <div>
+          <Slider label="PEEP" value={peep} min={0} max={20} step={1} onChange={setPeep} unit=" cmH₂O" color={COLORS.green} />
+          <Slider label="Vt" value={vt} min={200} max={700} step={10} onChange={setVt} unit=" mL" color={COLORS.accent} />
+          <Slider label="RR (animation speed)" value={rr} min={8} max={30} step={1} onChange={setRr} unit=" /min" color={COLORS.purple} />
+        </div>
+        <div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+            <Metric label="Paw" value={paw.toFixed(0)} unit="cmH₂O" color={COLORS.accent} />
+            <Metric label="Pplat" value={pPlateau.toFixed(0)} unit="cmH₂O" color={COLORS.yellow} />
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Metric label="Recruited" value={recruited} unit="%" color={COLORS.green} />
+            <Metric label="Transitional" value={transitional} unit="%" color={COLORS.yellow} warn={transitional > 60} />
+            <Metric label="Derecruited" value={derecruited} unit="%" color={COLORS.red} />
+          </div>
+        </div>
+      </div>
+
+      {/* Horizontal stacked bar */}
+      <div style={{ display: "flex", height: 20, borderRadius: 6, overflow: "hidden", border: `1px solid ${COLORS.cardBorder}`, margin: "8px 0" }}>
+        {recruited > 0 && <div style={{ width: `${recruited}%`, background: COLORS.green, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "#000", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", minWidth: recruited > 8 ? undefined : 0 }}>{recruited > 8 ? `${recruited}%` : ""}</div>}
+        {transitional > 0 && <div style={{ width: `${transitional}%`, background: COLORS.yellow, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "#000", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", minWidth: transitional > 8 ? undefined : 0 }}>{transitional > 8 ? `${transitional}%` : ""}</div>}
+        {derecruited > 0 && <div style={{ width: `${derecruited}%`, background: "#475569", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "#fff", fontWeight: 700, fontFamily: "'JetBrains Mono', monospace", minWidth: derecruited > 8 ? undefined : 0 }}>{derecruited > 8 ? `${derecruited}%` : ""}</div>}
+      </div>
+
+      {/* Play / Pause */}
+      <div style={{ display: "flex", gap: 10, alignItems: "center", margin: "8px 0" }}>
+        <button onClick={toggle} style={{
+          padding: "8px 20px", borderRadius: 6, border: `1px solid ${COLORS.accent}`,
+          background: isPlaying ? `${COLORS.accent}22` : "transparent", color: COLORS.accent,
+          cursor: "pointer", fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: 700,
+          minHeight: 44, minWidth: 44,
+        }}>{isPlaying ? "⏸ Pause" : "▶ Play Breath"}</button>
+        <span style={{ fontSize: 11, color: COLORS.textMuted, fontFamily: "'JetBrains Mono', monospace" }}>
+          {breathPhase < 0.4 ? "Inspiration" : "Expiration"} — {(breathPhase * 100).toFixed(0)}%
+        </span>
+      </div>
+
+      {transitional > 60 && <Callout type="warn"><strong>{'>'} 60% transitional acini</strong> — high risk of atelectrauma. These acini cycle open/shut each breath, causing repetitive mechanical stress. Consider increasing <Term abbr="PEEP">PEEP</Term> to keep them recruited.</Callout>}
+      {recruited > 80 && vt > 400 && <Callout type="danger"><strong>{'>'} 80% recruited with high Vt</strong> — volutrauma risk. Most of the lung is open and receiving large tidal volumes. Consider reducing <Term abbr="Vt">Vt</Term>.</Callout>}
+      {derecruited > 60 && <Callout type="danger"><strong>{'>'} 60% derecruited</strong> — most of the lung is not participating in gas exchange. Consider increasing <Term abbr="PEEP">PEEP</Term> to recruit collapsed acini.</Callout>}
+
+      <div ref={containerRef} style={{ width: "100%", display: "flex", justifyContent: "center", marginTop: 8 }}>
+        <canvas ref={canvasRef} style={{ display: "block", borderRadius: 8, border: `1px solid ${COLORS.cardBorder}` }} />
+      </div>
+
+      <div style={{ display: "flex", gap: 12, marginTop: 8, fontSize: 11, color: COLORS.textDim, fontFamily: "'JetBrains Mono', monospace", justifyContent: "center", flexWrap: "wrap" }}>
+        <span>🟢 Recruited</span>
+        <span>🟡 Transitional (open)</span>
+        <span style={{ color: "#78350f" }}>⬤ Transitional (closed)</span>
+        <span style={{ color: "#475569" }}>⬤ Derecruited</span>
+      </div>
+    </div>
+  );
+}
+
+// Module 10: PEEP Optimization Synthesis
+function ModuleSynthesis() {
+  const [peep, setPeep] = useState(10);
+  const [pplat, setPplat] = useState(25);
+  const [pOpt, setPOpt] = useState(14);
+
+  const containerRef = useRef(null);
+  const canvasRef = useRef(null);
+  const cw = useContainerWidth(containerRef);
+  const ch = Math.max(180, Math.round(cw * 0.5));
+
+  const recruPct = (p) => Math.min(100, Math.max(0, 3.43 * p + 7.6));
+  const eNorm = (p) => 1 + 1.5 * Math.pow((p - pOpt) / pOpt, 2);
+
+  const pctAtPeep = recruPct(peep);
+  const pctAtPplat = recruPct(pplat);
+  const pctAtOpt = recruPct(pOpt);
+  const midP = (peep + pplat) / 2;
+  const deviation = midP - pOpt;
+  const zoneLabel = Math.abs(deviation) < 3 ? "balanced" : deviation < 0 ? "rd" : "od";
+  const zoneColors = { balanced: COLORS.green, rd: COLORS.yellow, od: COLORS.red };
+  const zoneMessages = {
+    balanced: "Operating near optimal — R/D and overdistension are balanced.",
+    rd: "Operating below optimal — derecruitment and atelectrauma dominate.",
+    od: "Operating above optimal — overdistension and volutrauma dominate.",
+  };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || cw < 10) return;
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = cw * dpr;
+    canvas.height = ch * dpr;
+    canvas.style.width = cw + "px";
+    canvas.style.height = ch + "px";
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, cw, ch);
+    drawGrid(ctx, cw, ch);
+
+    const fs = Math.max(9, Math.round(cw * 0.022));
+    const padL = fs * 4, padR = fs * 3, padT = fs * 2, padB = fs * 3;
+    const plotW = cw - padL - padR;
+    const plotH = ch - padT - padB;
+    const pMin = 0, pMax = 40;
+
+    const mapP = (p) => padL + ((p - pMin) / (pMax - pMin)) * plotW;
+    const mapY = (frac) => padT + plotH - frac * plotH; // frac 0–1
+
+    // Recruitment gradient background (subtle, opacity ~0.15)
+    for (let px = 0; px < plotW; px++) {
+      const p = pMin + (px / plotW) * (pMax - pMin);
+      const pct = recruPct(p) / 100;
+      ctx.fillStyle = `rgba(52, 211, 153, ${pct * 0.15})`;
+      ctx.fillRect(padL + px, padT, 1, plotH);
+    }
+
+    // PEEP-to-Pplat operating window shading
+    const x1 = mapP(Math.max(pMin, peep));
+    const x2 = mapP(Math.min(pMax, pplat));
+    ctx.fillStyle = zoneColors[zoneLabel] + "22";
+    ctx.fillRect(x1, padT, x2 - x1, plotH);
+    ctx.strokeStyle = zoneColors[zoneLabel] + "66";
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(x1, padT, x2 - x1, plotH);
+
+    // PEEP and Pplat vertical lines
+    [{ p: peep, label: "PEEP", col: COLORS.green }, { p: pplat, label: "Pplat", col: COLORS.yellow }].forEach(({ p, label, col }) => {
+      const x = mapP(p);
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + plotH); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = col;
+      ctx.font = `bold ${fs}px 'JetBrains Mono', monospace`;
+      ctx.textAlign = "center";
+      ctx.fillText(label, x, padT - 4);
+    });
+
+    // P_opt vertical line (prominent)
+    const xOpt = mapP(pOpt);
+    ctx.strokeStyle = COLORS.accent;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 4]);
+    ctx.beginPath(); ctx.moveTo(xOpt, padT); ctx.lineTo(xOpt, padT + plotH); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = COLORS.accent;
+    ctx.font = `bold ${fs + 1}px 'JetBrains Mono', monospace`;
+    ctx.textAlign = "center";
+    ctx.fillText(`P_opt = ${pOpt}`, xOpt, padT + plotH + fs * 1.5);
+
+    // Elastance parabola
+    ctx.strokeStyle = COLORS.purple;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    for (let px = 0; px <= plotW; px++) {
+      const p = pMin + (px / plotW) * (pMax - pMin);
+      const e = eNorm(p);
+      const eMax = 4;
+      const y = mapY(Math.max(0, 1 - (e - 1) / (eMax - 1))); // invert: lower E = better = higher on Y
+      px === 0 ? ctx.moveTo(padL + px, y) : ctx.lineTo(padL + px, y);
+    }
+    ctx.stroke();
+
+    // Recruitment % curve
+    ctx.strokeStyle = COLORS.green;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    for (let px = 0; px <= plotW; px++) {
+      const p = pMin + (px / plotW) * (pMax - pMin);
+      const y = mapY(recruPct(p) / 100);
+      px === 0 ? ctx.moveTo(padL + px, y) : ctx.lineTo(padL + px, y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // "%Recruited at P_opt" annotation
+    ctx.fillStyle = COLORS.green;
+    ctx.font = `bold ${fs}px 'JetBrains Mono', monospace`;
+    ctx.textAlign = "left";
+    const recAtOpt = recruPct(pOpt);
+    ctx.fillText(`${recAtOpt.toFixed(0)}% recruited`, xOpt + 6, mapY(recAtOpt / 100) - 4);
+
+    // Axis labels
+    ctx.fillStyle = COLORS.textDim;
+    ctx.font = `${fs}px 'JetBrains Mono', monospace`;
+    ctx.textAlign = "center";
+    ctx.fillText("Paw (cmH₂O)", cw / 2, ch - fs * 0.3);
+    ctx.save();
+    ctx.translate(fs, ch / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText("← Better mechanics / More recruited →", 0, 0);
+    ctx.restore();
+
+    // X-axis ticks
+    ctx.fillStyle = COLORS.textMuted;
+    ctx.font = `${Math.max(8, fs - 1)}px 'JetBrains Mono', monospace`;
+    ctx.textAlign = "center";
+    for (let p = 0; p <= 40; p += 10) {
+      ctx.fillText(p, mapP(p), padT + plotH + fs * 2.5);
+    }
+  }, [peep, pplat, pOpt, cw, ch, zoneLabel]);
+
+  return (
+    <div>
+      <h3 style={{ color: COLORS.text, fontSize: 16, fontWeight: 700, margin: "0 0 4px", fontFamily: "'Space Grotesk', sans-serif" }}>
+        PEEP Optimization: The Tradeoff
+      </h3>
+
+      {/* Headline callout */}
+      <div style={{
+        background: `linear-gradient(135deg, ${COLORS.accentDim}33, ${COLORS.purpleDim}33)`,
+        border: `1px solid ${COLORS.accent}44`, borderRadius: 10,
+        padding: 16, margin: "10px 0",
+      }}>
+        <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.accent, lineHeight: 1.4, fontFamily: "'Space Grotesk', sans-serif" }}>
+          100% recruitment is not the goal.
+        </div>
+        <div style={{ fontSize: 12, color: COLORS.textDim, lineHeight: 1.6, marginTop: 6 }}>
+          At optimal pressure, only <strong style={{ color: COLORS.yellow }}>~40–45%</strong> of the lung is recruited (Amini et al., IEEE 2017). Pressures needed for full recruitment overdistend already-open tissue. The goal is <strong>minimizing total injury</strong> — balancing atelectrauma against volutrauma.
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "10px 0" }}>
+        <Slider label="PEEP" value={peep} min={0} max={20} step={1} onChange={setPeep} unit=" cmH₂O" color={COLORS.green} />
+        <Slider label="Pplat" value={pplat} min={peep + 2} max={40} step={1} onChange={setPplat} unit=" cmH₂O" color={COLORS.yellow} />
+        <Slider label="P_opt (optimal)" value={pOpt} min={8} max={25} step={1} onChange={setPOpt} unit=" cmH₂O" color={COLORS.accent} />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "8px 0" }}>
+        <Metric label="% Recr @ PEEP" value={pctAtPeep.toFixed(0)} unit="%" color={COLORS.green} />
+        <Metric label="% Recr @ Pplat" value={pctAtPplat.toFixed(0)} unit="%" color={COLORS.yellow} />
+        <Metric label="% Recr @ P_opt" value={pctAtOpt.toFixed(0)} unit="%" color={COLORS.accent} />
+      </div>
+
+      <div style={{
+        textAlign: "center", padding: 10, borderRadius: 8,
+        background: `${zoneColors[zoneLabel]}15`, border: `1px solid ${zoneColors[zoneLabel]}33`,
+        marginBottom: 8,
+      }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: zoneColors[zoneLabel], fontFamily: "'JetBrains Mono', monospace" }}>
+          {zoneMessages[zoneLabel]}
+        </div>
+      </div>
+
+      {pplat > 28 && <Callout type="danger">Above ~28 cmH₂O, the model predicts 100% recruitment — further pressure increases cause pure overdistension with no additional recruitment benefit.</Callout>}
+
+      <div ref={containerRef} style={{ width: "100%", marginTop: 8 }}>
+        <canvas ref={canvasRef} style={{ display: "block", borderRadius: 8, background: "#0d1117", border: `1px solid ${COLORS.cardBorder}` }} />
+      </div>
+
+      <div style={{ display: "flex", gap: 12, marginTop: 8, fontSize: 11, color: COLORS.textDim, fontFamily: "'JetBrains Mono', monospace", flexWrap: "wrap" }}>
+        <span><span style={{ color: COLORS.purple }}>━━</span> Elastance (lower = better)</span>
+        <span><span style={{ color: COLORS.green }}>╌╌</span> % Recruited</span>
+        <span>█ Operating window</span>
+      </div>
+    </div>
+  );
+}
+
 // Module 7: Quiz
 function ModuleQuiz() {
   const questions = [
@@ -1385,6 +2083,18 @@ function ModuleQuiz() {
       opts: ["~9.4 J/min", "~18.8 J/min", "~12.0 J/min", "~24.0 J/min"],
       correct: 0,
       explain: "MP ≈ 0.098 × 20 × 0.4 × (30 − 0.5×12) = 0.098 × 20 × 0.4 × 24 = 18.816 → ~18.8 J/min. Actually, let's recalculate: 0.098 × 20 × 0.4 = 0.784. × 24 = 18.8 J/min. The correct answer is ~18.8.",
+    },
+    {
+      q: "A patient on ACV with ARDS has a P-V loop showing marked flattening at high volumes, with no concavity at low volumes. This pattern suggests:",
+      opts: ["High recruitability — increase PEEP", "Overdistension — consider reducing Vt or PEEP", "Normal P-V relationship — no changes needed", "Auto-PEEP — increase expiratory time"],
+      correct: 1,
+      explain: "Flattening at high volumes = upper inflection point (UIP) = overdistension. The lung is being stretched beyond its elastic limit. With no LIP concavity (no recruitment), this is a 'stiff lung' pattern — reduce Vt or PEEP.",
+    },
+    {
+      q: "You increase PEEP from 8 to 16 cmH₂O. On the recruitment animation, the percentage of transitional acini decreases sharply but the recruited percentage is now 85%. What is the main risk?",
+      opts: ["Atelectrauma from cyclic R/D", "Volutrauma from overdistending already-open acini", "Decreased cardiac output only", "No significant risk — higher PEEP is always better"],
+      correct: 1,
+      explain: "At 85% recruitment with high PEEP, most acini are open and receiving tidal volume. The transitional zone shrank (good — less atelectrauma), but now the dominant risk is volutrauma: the already-open tissue is being overdistended. This is why the 'optimal' pressure is NOT 100% recruitment.",
     },
   ];
   // Fix Q6 — swap correct answer
@@ -1480,6 +2190,9 @@ export default function VentPhysiologyTool() {
     { id: "calc", label: "ΔP & MP", color: COLORS.orange },
     { id: "ri", label: "R/I Ratio", color: COLORS.purple },
     { id: "tau", label: "τ", color: COLORS.red },
+    { id: "pv", label: "P-V Loop", color: COLORS.green },
+    { id: "recruit", label: "R/D", color: COLORS.orange },
+    { id: "synthesis", label: "PEEP Goal", color: COLORS.yellow },
     { id: "quiz", label: "Quiz", color: COLORS.accent },
   ];
 
@@ -1492,6 +2205,9 @@ export default function VentPhysiologyTool() {
       case "calc": return <ModuleCalculator />;
       case "ri": return <ModuleRI />;
       case "tau": return <ModuleTimeConstant />;
+      case "pv": return <ModulePVLoops />;
+      case "recruit": return <ModuleRecruitment />;
+      case "synthesis": return <ModuleSynthesis />;
       case "quiz": return <ModuleQuiz />;
       default: return null;
     }
@@ -1528,21 +2244,30 @@ export default function VentPhysiologyTool() {
           </div>
         </div>
 
-        {/* Tabs — compact 4×2 grid on mobile, centered flex on desktop */}
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: isMobile ? "repeat(4, 1fr)" : "repeat(8, auto)",
-          gap: 6,
-          padding: "10px clamp(12px, 4vw, 24px) 4px",
-          maxWidth: isMobile ? "100%" : "min(95vw, 720px)",
-          margin: isMobile ? 0 : "0 auto",
-          justifyContent: isMobile ? undefined : "center",
-        }}>
-          {tabs.map(t => (
-            <TabBtn key={t.id} active={activeTab === t.id} onClick={() => setActiveTab(t.id)} color={t.color} compact={isMobile}>
-              {t.label}
-            </TabBtn>
-          ))}
+        {/* Tabs — scrollable on mobile with gradient fade, centered flex on desktop */}
+        <div style={{ position: "relative", maxWidth: isMobile ? "100%" : "min(95vw, 720px)", margin: isMobile ? 0 : "0 auto" }}>
+          <div style={{
+            display: "flex",
+            gap: 6,
+            padding: "10px clamp(12px, 4vw, 24px) 4px",
+            overflowX: isMobile ? "auto" : "visible",
+            WebkitOverflowScrolling: "touch",
+            scrollbarWidth: "none",
+            flexWrap: isMobile ? "nowrap" : "wrap",
+            justifyContent: isMobile ? undefined : "center",
+          }}>
+            {tabs.map(t => (
+              <TabBtn key={t.id} active={activeTab === t.id} onClick={() => setActiveTab(t.id)} color={t.color} compact={isMobile}>
+                {t.label}
+              </TabBtn>
+            ))}
+          </div>
+          {/* Scroll fade indicator (mobile only) */}
+          {isMobile && <div style={{
+            position: "absolute", top: 0, right: 0, bottom: 0, width: 40,
+            background: `linear-gradient(to right, transparent, ${COLORS.bg})`,
+            pointerEvents: "none",
+          }} />}
         </div>
 
         {/* Content */}
