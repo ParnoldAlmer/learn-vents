@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 // ─── Constants & Helpers ───
 const COLORS = {
@@ -23,14 +23,40 @@ const COLORS = {
 
 const lerp = (a, b, t) => a + (b - a) * t;
 
+// ─── Responsive Hooks ───
+function useContainerWidth(ref) {
+  const [width, setWidth] = useState(300);
+  useEffect(() => {
+    if (!ref.current) return;
+    const update = () => setWidth(Math.floor(ref.current.getBoundingClientRect().width));
+    const ro = new ResizeObserver(update);
+    ro.observe(ref.current);
+    update();
+    return () => ro.disconnect();
+  }, [ref]);
+  return width;
+}
+
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth < 480);
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth < 480);
+    window.addEventListener("resize", handler);
+    return () => window.removeEventListener("resize", handler);
+  }, []);
+  return isMobile;
+}
+
 // ─── Waveform Drawing Helpers ───
 function drawGrid(ctx, w, h) {
   ctx.strokeStyle = "#1e293b";
   ctx.lineWidth = 0.5;
-  for (let x = 0; x < w; x += 40) {
+  const gx = Math.max(25, w / 13);
+  const gy = Math.max(18, h / 6);
+  for (let x = 0; x < w; x += gx) {
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
   }
-  for (let y = 0; y < h; y += 30) {
+  for (let y = 0; y < h; y += gy) {
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
   }
 }
@@ -126,38 +152,43 @@ function generateVolumeWave(params) {
 }
 
 // ─── Canvas Waveform Component ───
-function WaveformCanvas({ data, yLabel, yMin, yMax, color, width = 520, height = 140, annotations, zeroLine }) {
+function WaveformCanvas({ data, yLabel, yMin, yMax, color, aspectRatio = 0.27, annotations, zeroLine }) {
+  const containerRef = useRef(null);
   const canvasRef = useRef(null);
+  const w = useContainerWidth(containerRef);
+  const h = Math.max(80, Math.round(w * aspectRatio));
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !data.length) return;
+    if (!canvas || !data.length || w < 10) return;
     const ctx = canvas.getContext("2d");
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = width * dpr;
-    canvas.height = height * dpr;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + "px";
+    canvas.style.height = h + "px";
     ctx.scale(dpr, dpr);
 
-    ctx.clearRect(0, 0, width, height);
-    drawGrid(ctx, width, height);
+    ctx.clearRect(0, 0, w, h);
+    drawGrid(ctx, w, h);
+
+    const fs = Math.max(9, Math.round(w * 0.022));
 
     // y-axis label
     ctx.save();
     ctx.fillStyle = COLORS.textDim;
-    ctx.font = "11px 'JetBrains Mono', monospace";
-    ctx.translate(12, height / 2);
+    ctx.font = `${fs}px 'JetBrains Mono', monospace`;
+    ctx.translate(fs, h / 2);
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = "center";
     ctx.fillText(yLabel, 0, 0);
     ctx.restore();
 
-    const padL = 30, padR = 10, padT = 10, padB = 20;
-    const plotW = width - padL - padR;
-    const plotH = height - padT - padB;
+    const padL = fs * 2.8, padR = 8, padT = 8, padB = fs * 2;
+    const plotW = w - padL - padR;
+    const plotH = h - padT - padB;
 
-    const xKey = Object.keys(data[0]).find(k => k === "t");
     const yKey = Object.keys(data[0]).find(k => k !== "t");
-
     const mapX = (t) => padL + (t / data[data.length - 1].t) * plotW;
     const mapY = (v) => padT + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
 
@@ -168,7 +199,7 @@ function WaveformCanvas({ data, yLabel, yMin, yMax, color, width = 520, height =
       ctx.setLineDash([4, 4]);
       ctx.beginPath();
       ctx.moveTo(padL, mapY(zeroLine));
-      ctx.lineTo(width - padR, mapY(zeroLine));
+      ctx.lineTo(w - padR, mapY(zeroLine));
       ctx.stroke();
       ctx.setLineDash([]);
     }
@@ -193,57 +224,75 @@ function WaveformCanvas({ data, yLabel, yMin, yMax, color, width = 520, height =
     ctx.fill();
     ctx.globalAlpha = 1;
 
-    // annotations
+    // annotations with background pill
     if (annotations) {
+      ctx.font = `bold ${fs}px 'JetBrains Mono', monospace`;
       annotations.forEach(a => {
         const x = mapX(a.t);
         const y = mapY(a.val);
-        ctx.fillStyle = a.color || COLORS.yellow;
-        ctx.font = "bold 10px 'JetBrains Mono', monospace";
-        ctx.fillText(a.label, x + 4, y - 6);
+        const label = a.label;
+        const tw = ctx.measureText(label).width;
+        const px = 3, py = 2;
+        // pill background
+        ctx.fillStyle = "rgba(13,17,23,0.85)";
+        const rx = x + 4, ry = y - fs - py * 2 - 2;
         ctx.beginPath();
-        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.roundRect(rx, ry, tw + px * 2, fs + py * 2, 3);
+        ctx.fill();
+        // label
+        ctx.fillStyle = a.color || COLORS.yellow;
+        ctx.textAlign = "left";
+        ctx.fillText(label, rx + px, ry + fs + py - 2);
+        // dot
+        ctx.beginPath();
+        ctx.arc(x, y, Math.max(2, fs * 0.35), 0, Math.PI * 2);
         ctx.fill();
       });
     }
 
     // Y axis ticks
     ctx.fillStyle = COLORS.textMuted;
-    ctx.font = "9px 'JetBrains Mono', monospace";
+    ctx.font = `${Math.max(8, fs - 1)}px 'JetBrains Mono', monospace`;
     ctx.textAlign = "right";
     const ySteps = 4;
     for (let i = 0; i <= ySteps; i++) {
       const val = yMin + (yMax - yMin) * (i / ySteps);
-      ctx.fillText(Math.round(val), padL - 4, mapY(val) + 3);
+      ctx.fillText(Math.round(val), padL - 3, mapY(val) + fs * 0.35);
     }
-  }, [data, yMin, yMax, color, width, height, annotations, zeroLine, yLabel]);
+  }, [data, yMin, yMax, color, w, h, annotations, zeroLine, yLabel]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      style={{ width, height, borderRadius: 8, background: "#0d1117", border: `1px solid ${COLORS.cardBorder}` }}
-    />
+    <div ref={containerRef} style={{ width: "100%" }}>
+      <canvas
+        ref={canvasRef}
+        style={{ display: "block", borderRadius: 8, background: "#0d1117", border: `1px solid ${COLORS.cardBorder}` }}
+      />
+    </div>
   );
 }
 
 // ─── Slider Component ───
 function Slider({ label, value, min, max, step, onChange, unit, color = COLORS.accent }) {
   return (
-    <div style={{ marginBottom: 12 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-        <span style={{ fontSize: 12, color: COLORS.textDim, fontFamily: "'JetBrains Mono', monospace" }}>{label}</span>
-        <span style={{ fontSize: 12, color, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+        <span style={{ fontSize: "clamp(11px, 2.5vw, 12px)", color: COLORS.textDim, fontFamily: "'JetBrains Mono', monospace" }}>{label}</span>
+        <span style={{ fontSize: "clamp(11px, 2.5vw, 12px)", color, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
           {value}{unit}
         </span>
       </div>
-      <input
-        type="range" min={min} max={max} step={step} value={value}
-        onChange={e => onChange(Number(e.target.value))}
-        style={{
-          width: "100%", height: 6, appearance: "none", background: `linear-gradient(to right, ${color} ${((value - min) / (max - min)) * 100}%, ${COLORS.cardBorder} ${((value - min) / (max - min)) * 100}%)`,
-          borderRadius: 3, outline: "none", cursor: "pointer", accentColor: color,
-        }}
-      />
+      <div style={{ padding: "8px 0" }}>
+        <input
+          type="range" min={min} max={max} step={step} value={value}
+          onChange={e => onChange(Number(e.target.value))}
+          style={{
+            width: "100%", height: 6, appearance: "none", WebkitAppearance: "none",
+            background: `linear-gradient(to right, ${color} ${((value - min) / (max - min)) * 100}%, ${COLORS.cardBorder} ${((value - min) / (max - min)) * 100}%)`,
+            borderRadius: 3, outline: "none", cursor: "pointer", accentColor: color,
+            WebkitTapHighlightColor: "transparent", touchAction: "manipulation",
+          }}
+        />
+      </div>
     </div>
   );
 }
@@ -254,10 +303,11 @@ function Metric({ label, value, unit, color = COLORS.accent, warn }) {
     <div style={{
       background: warn ? `${COLORS.redDim}44` : `${color}11`,
       border: `1px solid ${warn ? COLORS.red + "44" : color + "33"}`,
-      borderRadius: 8, padding: "8px 12px", textAlign: "center", minWidth: 80,
+      borderRadius: 8, padding: "8px 10px", textAlign: "center",
+      flex: "1 1 auto", minWidth: 0,
     }}>
-      <div style={{ fontSize: 10, color: COLORS.textMuted, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1 }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 800, color: warn ? COLORS.red : color, fontFamily: "'JetBrains Mono', monospace" }}>
+      <div style={{ fontSize: 10, color: COLORS.textMuted, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1, whiteSpace: "nowrap" }}>{label}</div>
+      <div style={{ fontSize: "clamp(14px, 4vw, 20px)", fontWeight: 800, color: warn ? COLORS.red : color, fontFamily: "'JetBrains Mono', monospace" }}>
         {value}<span style={{ fontSize: 11, color: COLORS.textDim }}> {unit}</span>
       </div>
     </div>
@@ -268,10 +318,12 @@ function Metric({ label, value, unit, color = COLORS.accent, warn }) {
 function TabBtn({ active, children, onClick, color = COLORS.accent }) {
   return (
     <button onClick={onClick} style={{
-      padding: "8px 16px", borderRadius: 6, border: `1px solid ${active ? color : COLORS.cardBorder}`,
+      padding: "10px 16px", borderRadius: 6, border: `1px solid ${active ? color : COLORS.cardBorder}`,
       background: active ? `${color}22` : "transparent", color: active ? color : COLORS.textDim,
       fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: active ? 700 : 400,
-      cursor: "pointer", transition: "all 0.2s",
+      cursor: "pointer", transition: "all 0.2s", whiteSpace: "nowrap", flexShrink: 0,
+      minHeight: 44, display: "inline-flex", alignItems: "center",
+      WebkitTapHighlightColor: "transparent",
     }}>
       {children}
     </button>
@@ -283,8 +335,9 @@ function EqBox({ children }) {
   return (
     <div style={{
       background: "#0d1117", border: `1px solid ${COLORS.cardBorder}`, borderRadius: 8,
-      padding: "10px 16px", fontFamily: "'JetBrains Mono', monospace", fontSize: 13,
+      padding: "10px 16px", fontFamily: "'JetBrains Mono', monospace", fontSize: "clamp(11px, 2.5vw, 13px)",
       color: COLORS.accent, textAlign: "center", margin: "8px 0",
+      overflowX: "auto", WebkitOverflowScrolling: "touch",
     }}>
       {children}
     </div>
@@ -299,8 +352,9 @@ function Callout({ type = "info", children }) {
   return (
     <div style={{
       background: `${c}11`, border: `1px solid ${c}33`, borderRadius: 8,
-      padding: "10px 14px", fontSize: 12, color: COLORS.text, lineHeight: 1.6,
+      padding: "10px 14px", fontSize: "clamp(11px, 2.5vw, 12px)", color: COLORS.text, lineHeight: 1.6,
       display: "flex", gap: 10, alignItems: "flex-start", margin: "10px 0",
+      wordBreak: "break-word", overflowWrap: "break-word",
     }}>
       <span style={{ fontSize: 16, flexShrink: 0 }}>{icons[type]}</span>
       <div>{children}</div>
@@ -312,6 +366,7 @@ function Callout({ type = "info", children }) {
 
 // ─── MODULE 0: VENT BASICS ───
 function ModuleBasics() {
+  const isMobile = useIsMobile();
   const [section, setSection] = useState("why");
   const [initSex, setInitSex] = useState("male");
   const [initHeight, setInitHeight] = useState(170);
@@ -363,7 +418,7 @@ function ModuleBasics() {
 
           <div style={bStyles.box}>
             <div style={bStyles.boxTitle}>The Two Reasons You Intubate</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 8 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12, marginTop: 8 }}>
               <div style={{ ...bStyles.miniCard, borderColor: COLORS.red + "44" }}>
                 <div style={{ color: COLORS.red, fontWeight: 700, fontSize: 13, marginBottom: 4 }}>1. Failure to Oxygenate</div>
                 <div style={{ fontSize: 11, color: COLORS.textDim, lineHeight: 1.5 }}>
@@ -401,7 +456,7 @@ function ModuleBasics() {
         <div>
           <p style={bStyles.p}>Every ventilator breath has 4 phases. Understanding this is the foundation for everything else.</p>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10 }}>
             {[
               { phase: "1. Trigger", desc: "What starts the breath? Either the patient (effort-triggered) or the vent (time-triggered at set RR).", color: COLORS.green, icon: "⚡" },
               { phase: "2. Inspiration", desc: "Gas flows in. The vent controls either VOLUME (fixed mL) or PRESSURE (fixed cmH₂O, flow varies). This is the key mode distinction.", color: COLORS.accent, icon: "💨" },
@@ -584,7 +639,7 @@ function ModuleBasics() {
 
           <div style={bStyles.box}>
             <div style={bStyles.boxTitle}>🎯 Safety Targets (Memorize These)</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 8, marginTop: 10 }}>
               {[
                 { label: "Plateau Pressure", target: "≤ 30", unit: "cmH₂O", why: "Higher → alveolar overdistension → VILI", color: COLORS.yellow },
                 { label: "Driving Pressure", target: "≤ 14", unit: "cmH₂O", why: "Strongest mortality predictor in ARDS (Amato, NEJM 2015)", color: COLORS.orange },
@@ -611,7 +666,7 @@ function ModuleBasics() {
               <br /><strong style={{ color: COLORS.text }}>Step 2:</strong> Bag the patient if in extremis. Easy to bag → vent problem. Hard to bag → patient problem.
               <br /><strong style={{ color: COLORS.text }}>Step 3:</strong> Think <strong style={{ color: COLORS.accent }}>DOPE</strong>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 8, marginTop: 10 }}>
               {[
                 { letter: "D", word: "Displacement", detail: "ETT dislodged, right mainstem, esophageal. Check depth, auscultate, CXR.", color: COLORS.red },
                 { letter: "O", word: "Obstruction", detail: "Mucus plug, kinked tube, biting ETT. Suction, check circuit, bite block.", color: COLORS.orange },
@@ -681,6 +736,7 @@ const bStyles = {
 
 // Module 1: Equation of Motion + Waveform Simulator
 function ModuleWaveforms() {
+  const isMobile = useIsMobile();
   const [peep, setPeep] = useState(5);
   const [vt, setVt] = useState(450);
   const [rr, setRr] = useState(14);
@@ -699,9 +755,9 @@ function ModuleWaveforms() {
   const dp = pplat - peep;
   const mp = 0.098 * rr * (ppeak - 0.5 * dp);
 
-  const pressureData = generateAcvPressureWave({ peep, ppeak, pplat, rr, ieRatio: 2, ti, stressIndex, hasAutopeep });
-  const flowData = generateFlowWave({ peep, rr, ti, peakFlow, hasAutopeep });
-  const volumeData = generateVolumeWave({ vt, rr, ti });
+  const pressureData = useMemo(() => generateAcvPressureWave({ peep, ppeak, pplat, rr, ieRatio: 2, ti, stressIndex, hasAutopeep }), [peep, ppeak, pplat, rr, ti, stressIndex, hasAutopeep]);
+  const flowData = useMemo(() => generateFlowWave({ peep, rr, ti, peakFlow, hasAutopeep }), [peep, rr, ti, peakFlow, hasAutopeep]);
+  const volumeData = useMemo(() => generateVolumeWave({ vt, rr, ti }), [vt, rr, ti]);
 
   const pAnnotations = [
     { t: ti * 0.03, val: ppeak, label: "Ppeak", color: COLORS.red },
@@ -719,7 +775,7 @@ function ModuleWaveforms() {
       </p>
       <EqBox>P<sub>aw</sub>(t) = P₀ + R<sub>RS</sub> × V̇(t) + E<sub>RS</sub> × V(t)</EqBox>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, margin: "12px 0" }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12, margin: "12px 0" }}>
         <div>
           <Slider label="PEEP" value={peep} min={0} max={20} step={1} onChange={setPeep} unit=" cmH₂O" color={COLORS.green} />
           <Slider label="Vt" value={vt} min={200} max={700} step={10} onChange={setVt} unit=" mL" color={COLORS.accent} />
@@ -794,7 +850,7 @@ function ModulePcond() {
 
       <div style={{
         background: `${steps[step].color}11`, border: `1px solid ${steps[step].color}33`,
-        borderRadius: 10, padding: 16, minHeight: 120, transition: "all 0.3s",
+        borderRadius: 10, padding: 16, minHeight: "auto", transition: "all 0.3s",
       }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: steps[step].color, marginBottom: 8, fontFamily: "'JetBrains Mono', monospace" }}>
           {steps[step].title}
@@ -838,28 +894,34 @@ function ModuleStressIndex() {
   const info = getLabel();
 
   // Draw stress index curve
+  const containerRef = useRef(null);
   const canvasRef = useRef(null);
+  const cw = useContainerWidth(containerRef);
+  const ch = Math.max(120, Math.round(cw * 0.35));
+
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || cw < 10) return;
     const ctx = canvas.getContext("2d");
     const dpr = window.devicePixelRatio || 1;
-    const w = 520, h = 180;
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
+    canvas.width = cw * dpr;
+    canvas.height = ch * dpr;
+    canvas.style.width = cw + "px";
+    canvas.style.height = ch + "px";
     ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, w, h);
-    drawGrid(ctx, w, h);
+    ctx.clearRect(0, 0, cw, ch);
+    drawGrid(ctx, cw, ch);
 
-    const padL = 40, padR = 20, padT = 20, padB = 30;
-    const plotW = w - padL - padR;
-    const plotH = h - padT - padB;
+    const fs = Math.max(9, Math.round(cw * 0.022));
+    const padL = fs * 4, padR = fs * 2, padT = fs * 1.5, padB = fs * 2.5;
+    const plotW = cw - padL - padR;
+    const plotH = ch - padT - padB;
 
     // Paw = a * t^b + c
     const a = 20, c = 8;
     const steps = 200;
     ctx.strokeStyle = info.color;
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
     for (let i = 0; i <= steps; i++) {
       const frac = i / steps;
@@ -885,28 +947,28 @@ function ModuleStressIndex() {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // labels
+    // axis labels
     ctx.fillStyle = COLORS.textDim;
-    ctx.font = "11px 'JetBrains Mono', monospace";
+    ctx.font = `${fs}px 'JetBrains Mono', monospace`;
     ctx.textAlign = "center";
-    ctx.fillText("Inspiratory Time →", w / 2, h - 6);
+    ctx.fillText("Inspiratory Time →", cw / 2, ch - fs * 0.3);
 
     ctx.save();
-    ctx.translate(14, h / 2);
+    ctx.translate(fs, ch / 2);
     ctx.rotate(-Math.PI / 2);
     ctx.fillText("Paw (cmH₂O)", 0, 0);
     ctx.restore();
 
     // b label
     ctx.fillStyle = info.color;
-    ctx.font = "bold 13px 'JetBrains Mono', monospace";
+    ctx.font = `bold ${fs + 1}px 'JetBrains Mono', monospace`;
     ctx.textAlign = "right";
-    ctx.fillText(`b = ${si.toFixed(2)}`, w - padR - 10, padT + 20);
+    ctx.fillText(`b = ${si.toFixed(2)}`, cw - padR - 4, padT + fs * 1.5);
 
     ctx.fillStyle = COLORS.textMuted;
-    ctx.font = "10px 'JetBrains Mono', monospace";
-    ctx.fillText("— linear ref (b=1)", w - padR - 10, padT + 36);
-  }, [si, info.color]);
+    ctx.font = `${fs - 1}px 'JetBrains Mono', monospace`;
+    ctx.fillText("— linear ref (b=1)", cw - padR - 4, padT + fs * 2.8);
+  }, [si, info.color, cw, ch]);
 
   return (
     <div>
@@ -928,13 +990,16 @@ function ModuleStressIndex() {
         <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: 4 }}>{info.action}</div>
       </div>
 
-      <canvas ref={canvasRef} style={{ width: 520, height: 180, borderRadius: 8, background: "#0d1117", border: `1px solid ${COLORS.cardBorder}` }} />
+      <div ref={containerRef} style={{ width: "100%" }}>
+        <canvas ref={canvasRef} style={{ display: "block", borderRadius: 8, background: "#0d1117", border: `1px solid ${COLORS.cardBorder}` }} />
+      </div>
     </div>
   );
 }
 
 // Module 4: Driving Pressure & Mechanical Power Calculator
 function ModuleCalculator() {
+  const isMobile = useIsMobile();
   const [height, setHeight] = useState(170);
   const [sex, setSex] = useState("male");
   const [peep, setPeep] = useState(10);
@@ -959,7 +1024,7 @@ function ModuleCalculator() {
         Driving Pressure & Mechanical Power
       </h3>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
         <div>
           <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
             {["male", "female"].map(s => (
@@ -1003,6 +1068,7 @@ function ModuleCalculator() {
 
 // Module 5: Recruitment-to-Inflation Ratio
 function ModuleRI() {
+  const isMobile = useIsMobile();
   const [vtHighPeep, setVtHighPeep] = useState(420);
   const [vTeHighToLow, setVTeHighToLow] = useState(680);
   const [crsLow, setCrsLow] = useState(35);
@@ -1020,7 +1086,7 @@ function ModuleRI() {
         Single-breath maneuver: after ≥10 min at high PEEP, reduce RR to ~10, then abruptly decrease PEEP (e.g., 15→5). Record the expired volume during the transition breath.
       </p>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
         <Slider label="Vt at high PEEP" value={vtHighPeep} min={300} max={600} step={10} onChange={setVtHighPeep} unit=" mL" color={COLORS.accent} />
         <Slider label="VTe high→low" value={vTeHighToLow} min={400} max={1200} step={10} onChange={setVTeHighToLow} unit=" mL" color={COLORS.green} />
         <Slider label="C_RS at low PEEP" value={crsLow} min={15} max={80} step={1} onChange={setCrsLow} unit=" mL/cmH₂O" color={COLORS.yellow} />
@@ -1046,23 +1112,26 @@ function ModuleRI() {
 
 // Module 6: Time Constant & Expiratory Flow
 function ModuleTimeConstant() {
+  const isMobile = useIsMobile();
   const [crs, setCrs] = useState(50);
   const [rrs, setRrs] = useState(10);
   const [vt, setVt] = useState(450);
   const [tExp, setTExp] = useState(3.0);
 
-  const tau = (crs / 1000) * rrs; // in seconds
+  const tau = (crs / 1000) * rrs;
   const threeT = 3 * tau;
   const percentExhaled = (1 - Math.exp(-tExp / tau)) * 100;
   const trappedVol = vt * Math.exp(-tExp / tau);
 
-  // Generate expiratory volume decay
-  const data = [];
-  for (let i = 0; i <= 200; i++) {
-    const t = (i / 200) * 5;
-    const v = vt * Math.exp(-t / tau);
-    data.push({ t, v });
-  }
+  const data = useMemo(() => {
+    const pts = [];
+    for (let i = 0; i <= 200; i++) {
+      const t = (i / 200) * 5;
+      const v = vt * Math.exp(-t / tau);
+      pts.push({ t, v });
+    }
+    return pts;
+  }, [vt, tau]);
 
   return (
     <div>
@@ -1074,7 +1143,7 @@ function ModuleTimeConstant() {
         After 3τ, ~95% of tidal volume is exhaled. Insufficient expiratory time relative to τ causes dynamic hyperinflation and intrinsic PEEP.
       </p>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
         <Slider label="C_RS" value={crs} min={15} max={100} step={5} onChange={setCrs} unit=" mL/cmH₂O" color={COLORS.green} />
         <Slider label="R_RS" value={rrs} min={5} max={30} step={1} onChange={setRrs} unit=" cmH₂O/L/s" color={COLORS.red} />
         <Slider label="Vt" value={vt} min={200} max={700} step={10} onChange={setVt} unit=" mL" color={COLORS.accent} />
@@ -1254,22 +1323,24 @@ export default function VentPhysiologyTool() {
     <div style={{
       minHeight: "100vh", background: COLORS.bg, color: COLORS.text,
       fontFamily: "'Space Grotesk', -apple-system, sans-serif",
+      WebkitTapHighlightColor: "transparent",
     }}>
       <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
 
       {/* Header */}
       <div style={{
         background: "linear-gradient(135deg, #0c4a6e 0%, #1e1b4b 50%, #0a0e17 100%)",
-        borderBottom: `1px solid ${COLORS.cardBorder}`, padding: "20px 24px",
+        borderBottom: `1px solid ${COLORS.cardBorder}`,
+        padding: "clamp(14px, 4vw, 24px)",
       }}>
-        <div style={{ maxWidth: 600, margin: "0 auto" }}>
+        <div style={{ maxWidth: "min(95vw, 720px)", margin: "0 auto" }}>
           <div style={{ fontSize: 10, color: COLORS.accent, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 2, marginBottom: 6 }}>
             Interactive Teaching Tool
           </div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, lineHeight: 1.3 }}>
+          <h1 style={{ fontSize: "clamp(16px, 5vw, 22px)", fontWeight: 700, margin: 0, lineHeight: 1.3 }}>
             Understanding Lung Physiology Through the Ventilator Screen
           </h1>
-          <p style={{ fontSize: 12, color: COLORS.textDim, margin: "6px 0 0", lineHeight: 1.5 }}>
+          <p style={{ fontSize: "clamp(10px, 2.5vw, 12px)", color: COLORS.textDim, margin: "6px 0 0", lineHeight: 1.5 }}>
             Based on Carteaux, Spinelli & Jaber — <em>Intensive Care Medicine</em> 2026
           </p>
           <p style={{ fontSize: 10, color: COLORS.textMuted, margin: "4px 0 0" }}>
@@ -1278,10 +1349,12 @@ export default function VentPhysiologyTool() {
         </div>
       </div>
 
-      {/* Tabs */}
+      {/* Tabs — horizontally scrollable on mobile, no wrap */}
       <div style={{
-        display: "flex", gap: 6, padding: "12px 24px", flexWrap: "wrap",
-        maxWidth: 600, margin: "0 auto", justifyContent: "center",
+        display: "flex", gap: 6,
+        padding: "10px clamp(12px, 4vw, 24px) 4px",
+        overflowX: "auto", WebkitOverflowScrolling: "touch",
+        scrollbarWidth: "none", msOverflowStyle: "none",
       }}>
         {tabs.map(t => (
           <TabBtn key={t.id} active={activeTab === t.id} onClick={() => setActiveTab(t.id)} color={t.color}>
@@ -1292,11 +1365,12 @@ export default function VentPhysiologyTool() {
 
       {/* Content */}
       <div style={{
-        maxWidth: 580, margin: "0 auto", padding: "0 24px 40px",
+        maxWidth: "min(95vw, 720px)", margin: "0 auto",
+        padding: `0 clamp(12px, 4vw, 24px) 40px`,
       }}>
         <div style={{
           background: COLORS.card, border: `1px solid ${COLORS.cardBorder}`,
-          borderRadius: 12, padding: 20, marginTop: 8,
+          borderRadius: 12, padding: "clamp(14px, 4vw, 20px)", marginTop: 8,
         }}>
           {renderModule()}
         </div>
