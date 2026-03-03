@@ -48,6 +48,7 @@ const GLOSSARY = {
   "ARDS": { full: "Acute Respiratory Distress Syndrome", detail: "Acute hypoxemic respiratory failure with bilateral opacities not fully explained by cardiac failure." },
   "SBT": { full: "Spontaneous Breathing Trial", detail: "Test of patient's ability to breathe with minimal or no vent support. Used to assess extubation readiness." },
   "ETT": { full: "Endotracheal Tube", detail: "Tube placed in trachea for mechanical ventilation." },
+  "ICU": { full: "Intensive Care Unit", detail: "Hospital unit providing continuous monitoring and life-support for critically ill patients." },
   "PaCO₂": { full: "Partial Pressure of Arterial CO₂", detail: "Normal 35-45 mmHg. Reflects adequacy of ventilation (minute ventilation)." },
   "PaO₂": { full: "Partial Pressure of Arterial O₂", detail: "Normal 80-100 mmHg on room air. Reflects oxygenation." },
   "SpO₂": { full: "Peripheral Oxygen Saturation", detail: "Pulse oximetry reading. Target 92-96% in most ventilated patients." },
@@ -1576,6 +1577,217 @@ function ModuleTimeConstant() {
   );
 }
 
+// ─── Mini P-V Canvas for Board Pattern Cards ───
+const NORMAL_PV_PARAMS = { peep: 5, vt: 400, crs: 60, rrs: 8, alpha: 0.02, beta: 0.02 };
+
+function MiniPVCanvas({ pvParams, color, cardName }) {
+  const canvasRef = useRef(null);
+  const W = 160, H = 110;
+  const isNormalCard = cardName === "Normal";
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = W + "px";
+    canvas.style.height = H + "px";
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, W, H);
+
+    // Generate both loops
+    const normalLoop = generatePVLoop(NORMAL_PV_PARAMS);
+    const pathLoop = generatePVLoop(pvParams);
+
+    // Air trapping: shift the loop upward so it doesn't close at V=0
+    const trappedVol = pvParams.trapping || 0;
+    if (trappedVol > 0) {
+      // Shift insp limb up — starts at trapped volume
+      pathLoop.insp.forEach(d => { d.v += trappedVol; });
+      // Shift exp limb up — but the last ~20% decays less (incomplete exhalation)
+      const n = pathLoop.exp.length;
+      pathLoop.exp.forEach((d, i) => {
+        const frac = i / n; // 0 at top, 1 at bottom
+        // Full offset at top, decays to trappedVol at bottom (never reaches 0)
+        d.v += trappedVol * (1 - frac * 0.3);
+      });
+    }
+
+    // Determine shared axis range from BOTH loops
+    const allP = [
+      ...normalLoop.insp.map(d => d.p), ...normalLoop.exp.map(d => d.p),
+      ...pathLoop.insp.map(d => d.p), ...pathLoop.exp.map(d => d.p),
+    ];
+    const allV = [
+      ...normalLoop.insp.map(d => d.v), ...normalLoop.exp.map(d => d.v),
+      ...pathLoop.insp.map(d => d.v), ...pathLoop.exp.map(d => d.v),
+    ];
+    const pMin = Math.floor(Math.min(...allP) - 2);
+    const pMax = Math.ceil(Math.max(...allP) + 2);
+    const vMin = Math.min(0, Math.floor(Math.min(...allV) - 10));
+    const vMax = Math.ceil(Math.max(...allV) + 20);
+
+    const pad = { l: 6, r: 6, t: 6, b: 6 };
+    const plotW = W - pad.l - pad.r;
+    const plotH = H - pad.t - pad.b;
+    const mapP = (p) => pad.l + ((p - pMin) / (pMax - pMin)) * plotW;
+    const mapV = (v) => pad.t + plotH - ((v - vMin) / (vMax - vMin)) * plotH;
+
+    // Helper: draw a loop (fill + insp solid + exp dashed)
+    const drawLoop = (loop, col, fillAlpha, inspWidth, expWidth, expAlpha, dashed) => {
+      // Fill
+      ctx.globalAlpha = fillAlpha;
+      ctx.fillStyle = col;
+      ctx.beginPath();
+      loop.insp.forEach((d, i) => { const x = mapP(d.p), y = mapV(d.v); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+      for (let i = loop.exp.length - 1; i >= 0; i--) { ctx.lineTo(mapP(loop.exp[i].p), mapV(loop.exp[i].v)); }
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 1;
+
+      // Insp limb
+      ctx.strokeStyle = col;
+      ctx.globalAlpha = dashed ? 0.25 : 1;
+      ctx.lineWidth = inspWidth;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      loop.insp.forEach((d, i) => { const x = mapP(d.p), y = mapV(d.v); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+      ctx.stroke();
+
+      // Exp limb
+      ctx.globalAlpha = dashed ? 0.25 : expAlpha;
+      ctx.lineWidth = expWidth;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      loop.exp.forEach((d, i) => { const x = mapP(d.p), y = mapV(d.v); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    };
+
+    // 1) Normal reference loop (faint) — skip for Normal card
+    if (!isNormalCard) {
+      drawLoop(normalLoop, COLORS.textMuted, 0.05, 1.2, 1, 0.25, true);
+    }
+
+    // 2) Static compliance line through NORMAL loop center
+    if (!isNormalCard) {
+      ctx.strokeStyle = COLORS.textMuted;
+      ctx.globalAlpha = 0.4;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(mapP(NORMAL_PV_PARAMS.peep), mapV(0));
+      ctx.lineTo(mapP(normalLoop.pplat), mapV(NORMAL_PV_PARAMS.vt));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+
+    // 3) Pathological loop on top
+    drawLoop(pathLoop, color, 0.10, 2.5, 2, 0.7, false);
+
+    // 4) Low Compliance: also draw pathological compliance line in accent color
+    if (cardName === "Low Compliance") {
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.6;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(mapP(pvParams.peep), mapV(0));
+      ctx.lineTo(mapP(pathLoop.pplat), mapV(pvParams.vt));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+
+    // 5) High Resistance: double-headed arrow at mid-volume showing gap
+    if (cardName === "High Resistance") {
+      const midIdx = Math.floor(pathLoop.insp.length * 0.5);
+      const inspPt = pathLoop.insp[midIdx];
+      // Find exp point at same volume
+      let expP = inspPt.p;
+      for (const d of pathLoop.exp) {
+        if (Math.abs(d.v - inspPt.v) < pvParams.vt * 0.05) { expP = d.p; break; }
+      }
+      const yMid = mapV(inspPt.v);
+      const xL = mapP(expP) + 2;
+      const xR = mapP(inspPt.p) - 2;
+      if (xR - xL > 8) {
+        ctx.strokeStyle = COLORS.orange;
+        ctx.lineWidth = 1.5;
+        ctx.globalAlpha = 0.9;
+        // Shaft
+        ctx.beginPath(); ctx.moveTo(xL, yMid); ctx.lineTo(xR, yMid); ctx.stroke();
+        // Left arrowhead
+        ctx.beginPath(); ctx.moveTo(xL, yMid); ctx.lineTo(xL + 4, yMid - 3); ctx.moveTo(xL, yMid); ctx.lineTo(xL + 4, yMid + 3); ctx.stroke();
+        // Right arrowhead
+        ctx.beginPath(); ctx.moveTo(xR, yMid); ctx.lineTo(xR - 4, yMid - 3); ctx.moveTo(xR, yMid); ctx.lineTo(xR - 4, yMid + 3); ctx.stroke();
+        // "R" label
+        ctx.fillStyle = COLORS.orange;
+        ctx.font = "bold 9px 'JetBrains Mono', monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("R", (xL + xR) / 2, yMid - 5);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // 6) Air Trapping: red highlight at the gap where loop doesn't close
+    if (cardName === "Air Trapping") {
+      const lastExp = pathLoop.exp[pathLoop.exp.length - 1];
+      const firstInsp = pathLoop.insp[0];
+      const gapY1 = mapV(firstInsp.v);
+      const gapY2 = mapV(lastExp.v);
+      if (Math.abs(gapY1 - gapY2) > 3) {
+        const gapX = mapP((lastExp.p + firstInsp.p) / 2);
+        // Small red arrow pointing at the gap
+        ctx.strokeStyle = COLORS.red;
+        ctx.lineWidth = 1.5;
+        ctx.globalAlpha = 0.9;
+        ctx.beginPath();
+        ctx.moveTo(gapX + 12, Math.min(gapY1, gapY2) + 3);
+        ctx.lineTo(gapX + 4, Math.min(gapY1, gapY2) + 3);
+        ctx.stroke();
+        // Arrowhead
+        ctx.beginPath();
+        ctx.moveTo(gapX + 4, Math.min(gapY1, gapY2) + 3);
+        ctx.lineTo(gapX + 8, Math.min(gapY1, gapY2));
+        ctx.moveTo(gapX + 4, Math.min(gapY1, gapY2) + 3);
+        ctx.lineTo(gapX + 8, Math.min(gapY1, gapY2) + 6);
+        ctx.stroke();
+        // Gap bracket
+        ctx.strokeStyle = COLORS.red;
+        ctx.globalAlpha = 0.5;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([2, 2]);
+        ctx.beginPath();
+        ctx.moveTo(gapX, gapY1);
+        ctx.lineTo(gapX, gapY2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+  }, [pvParams, color, cardName, isNormalCard]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{
+        display: "block",
+        width: W,
+        height: H,
+        borderRadius: 6,
+        background: "#0d1117",
+        border: `1px solid ${COLORS.cardBorder}`,
+      }}
+    />
+  );
+}
+
 // Module 8: Dynamic P-V Loops
 function ModulePVLoops() {
   const isMobile = useIsMobile();
@@ -1586,6 +1798,7 @@ function ModulePVLoops() {
   const [alpha, setAlpha] = useState(0.1);
   const [beta, setBeta] = useState(0.1);
   const [activeScenario, setActiveScenario] = useState(null);
+  const [quizSelected, setQuizSelected] = useState(null);
 
   const applyScenario = (key) => {
     const s = PV_SCENARIOS[key];
@@ -1761,11 +1974,101 @@ function ModulePVLoops() {
   return (
     <div>
       <h3 style={{ color: COLORS.text, fontSize: 16, fontWeight: 700, margin: "0 0 4px", fontFamily: "'Space Grotesk', sans-serif" }}>
-        Dynamic P-V Loops
+        📊 P-V Loops
       </h3>
-      <p style={{ fontSize: 12, color: COLORS.textDim, lineHeight: 1.6, margin: "0 0 10px" }}>
-        The pressure-volume loop during a tidal breath reveals hysteresis (loop area), overdistension (UIP flattening at high volume), and recruitment (LIP concavity at low volume). Changing <Term abbr="PEEP">PEEP</Term> shifts the operating window along the P-V curve.
+      <p style={{ fontSize: 12, color: COLORS.textDim, lineHeight: 1.6, margin: "0 0 14px" }}>
+        P-V loops are displayed in real-time on every modern <Term abbr="ICU">ICU</Term> ventilator. The shape tells you <Term abbr="C_RS">compliance</Term>, resistance, overdistension, and air trapping at a glance — without ordering any tests. Board favorite: identifying the pathology from the loop shape.
       </p>
+
+      {/* ── Board Patterns ── */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.text, fontFamily: "'JetBrains Mono', monospace", marginBottom: 8 }}>Board Patterns — the 5 loops you must recognize</div>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 8 }}>
+          {[
+            {
+              name: "Normal", icon: "✅", color: COLORS.green, shape: "Narrow almond, straight compliance slope, small Ppeak–Pplat gap", cause: "Healthy lungs, normal mechanics",
+              pv: { peep: 5, vt: 400, crs: 60, rrs: 8, alpha: 0.02, beta: 0.02 }
+            },
+            {
+              name: "Low Compliance", icon: "🫁", color: COLORS.red, shape: "Loop shifts RIGHT and becomes steeper — less volume per unit pressure", cause: "ARDS, pulmonary fibrosis, chest wall restriction",
+              pv: { peep: 5, vt: 400, crs: 22, rrs: 10, alpha: 0.15, beta: 0.05 }
+            },
+            {
+              name: "High Resistance", icon: "🌊", color: COLORS.orange, shape: "Loop WIDENS (large gap between insp and exp limbs). Ppeak rises but Pplat stays the same", cause: "Bronchospasm, mucus plug, kinked ETT",
+              pv: { peep: 5, vt: 400, crs: 60, rrs: 24, alpha: 0.02, beta: 0.02 }
+            },
+            {
+              name: "Air Trapping", icon: "🔄", color: COLORS.purple, shape: "Exp limb doesn't return to baseline volume — loop doesn't close at the bottom", cause: "COPD, inadequate exp time, auto-PEEP",
+              pv: { peep: 8, vt: 400, crs: 70, rrs: 20, alpha: 0.02, beta: 0.02, trapping: 60 }
+            },
+            {
+              name: "Overdistension (Beak Sign)", icon: "⚠️", color: COLORS.yellow, shape: "Upper insp limb flattens and curves rightward — the lung is getting stiffer as you inflate more", cause: "Excessive Vt or PEEP",
+              pv: { peep: 5, vt: 500, crs: 45, rrs: 10, alpha: 0.40, beta: 0.02 }
+            },
+          ].map((card, i) => (
+            <div key={i} style={{ ...bStyles.miniCard, borderLeft: `3px solid ${card.color}`, padding: "10px 12px" }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ color: card.color, fontWeight: 700, fontSize: 12, marginBottom: 4 }}>{card.icon} {card.name}</div>
+                  <div style={{ fontSize: 11, color: COLORS.text, lineHeight: 1.5, marginBottom: 4 }}>{card.shape}</div>
+                  <div style={{ fontSize: 10, color: COLORS.textMuted, lineHeight: 1.4 }}>{card.cause}</div>
+                </div>
+                <MiniPVCanvas pvParams={card.pv} color={card.color} cardName={card.name} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Key Landmark Callout ── */}
+      <Callout type="info">
+        <strong>Key Landmark — <Term abbr="Ppeak">Ppeak</Term> vs <Term abbr="Pplat">Pplat</Term>:</strong> On any P-V loop, the horizontal distance from <Term abbr="Pplat">Pplat</Term> to <Term abbr="Ppeak">Ppeak</Term> = resistive pressure (<Term abbr="R_RS">R</Term> × V̇). If <Term abbr="Ppeak">Ppeak</Term> is high but <Term abbr="Pplat">Pplat</Term> is normal → resistance problem (bronchospasm, mucus, kinked <Term abbr="ETT">ETT</Term>). If both are high → compliance problem (<Term abbr="ARDS">ARDS</Term>, fibrosis, pneumothorax). This is the single most testable concept from P-V loops.
+      </Callout>
+
+      {/* ── Board-Style Vignette ── */}
+      <div style={{ background: "#0d1117", border: `1px solid ${COLORS.cardBorder}`, borderRadius: 10, padding: 16, marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: COLORS.accent, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Board-Style Question</div>
+        <div style={{ fontSize: 13, color: COLORS.text, lineHeight: 1.6, marginBottom: 12 }}>
+          A 58-year-old man on <Term abbr="ACV">ACV</Term> (<Term abbr="Vt">Vt</Term> 450, <Term abbr="RR">RR</Term> 16, <Term abbr="PEEP">PEEP</Term> 5) has <Term abbr="Ppeak">Ppeak</Term> 38 and <Term abbr="Pplat">Pplat</Term> 20. The P-V loop shows a wide gap between inspiratory and expiratory limbs. Which is the most likely cause?
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {[
+            { label: "ARDS", idx: 0 },
+            { label: "Mucus plugging", idx: 1 },
+            { label: "Pneumothorax", idx: 2 },
+            { label: "Pulmonary fibrosis", idx: 3 },
+          ].map((opt) => {
+            const correct = 1;
+            let bg = "transparent", border = COLORS.cardBorder, col = COLORS.text;
+            if (quizSelected !== null) {
+              if (opt.idx === correct) { bg = `${COLORS.green}22`; border = COLORS.green; col = COLORS.green; }
+              else if (opt.idx === quizSelected) { bg = `${COLORS.red}22`; border = COLORS.red; col = COLORS.red; }
+            }
+            return (
+              <button key={opt.idx} onClick={() => { if (quizSelected === null) setQuizSelected(opt.idx); }} style={{
+                padding: "8px 12px", borderRadius: 8, border: `1px solid ${border}`,
+                background: bg, color: col, textAlign: "left", cursor: quizSelected !== null ? "default" : "pointer",
+                fontSize: 12, fontFamily: "'JetBrains Mono', monospace", transition: "all 0.2s",
+              }}>
+                <span style={{ fontWeight: 700, marginRight: 8 }}>{String.fromCharCode(65 + opt.idx)}.</span>{opt.label}
+              </button>
+            );
+          })}
+        </div>
+        {quizSelected !== null && (
+          <Callout type={quizSelected === 1 ? "success" : "danger"}>
+            <strong>Wide loop = high resistance.</strong> The gap between the inspiratory and expiratory limbs is proportional to <Term abbr="R_RS">R</Term> × V̇. <Term abbr="Ppeak">Ppeak</Term> 38 with <Term abbr="Pplat">Pplat</Term> 20 means P<sub>res</sub> = 18 cmH₂O — that's almost all resistance. <Term abbr="ARDS">ARDS</Term> and fibrosis would elevate <Term abbr="Pplat">Pplat</Term> (compliance problem), not widen the loop.{" "}
+            <strong style={{ color: COLORS.accent }}>Try the COPD preset in the simulator below to see this pattern.</strong>
+          </Callout>
+        )}
+      </div>
+
+      {/* ── Divider ── */}
+      <hr style={{ border: "none", borderTop: `1px solid ${COLORS.cardBorder}`, margin: "20px 0" }} />
+
+      {/* ── Simulator Section ── */}
+      <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.text, fontFamily: "'JetBrains Mono', monospace", marginBottom: 4 }}>Interactive Simulator</div>
+      <p style={{ fontSize: 11, color: COLORS.textMuted, margin: "0 0 10px", lineHeight: 1.5 }}>Adjust sliders to see how each parameter changes the loop shape.</p>
       <EqBox>C<sub>eff</sub>(V) = C<sub>RS</sub> × (1 − α(V/Vt)² + β(V/Vt))</EqBox>
 
       {/* Clinical Scenario Presets */}
