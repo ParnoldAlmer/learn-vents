@@ -235,13 +235,24 @@ function generatePVLoop({ peep, vt, crs, rrs, peakFlow = 60, alpha, beta }) {
   const ppeak = insp[insp.length - 1].p;
   const pplat = peep + elasticP(vt);
 
-  // ── Expiration: follows the static compliance curve from (Pplat, Vt) → (PEEP, 0) ──
-  // Paw ≈ PEEP + elastic(V)  (the compliance line — no resistive component)
-  // This is the standard clinical P-V loop: expiration traces the compliance curve
-  for (let i = 0; i <= steps; i++) {
-    const v = vt * (1 - i / steps);
-    const p = peep + elasticP(v);
-    exp.push({ p, v });
+  // ── Expiration: P tracks the static compliance curve with a small leftward offset ──
+  // The offset represents resistive pressure during exhalation, but measured at the
+  // Y-piece (proximal to ETT), only a fraction of total R_RS is visible.
+  // Peak exp flow ≈ 50% of insp flow (longer exp time), and effective R during exp
+  // as seen by the Paw sensor ≈ 30% of R_RS (most resistance is in the ETT downstream)
+  const expFlowPeak = flowLps * 0.5;
+  const rExp = rrs * 0.3;
+
+  // Start at Pplat (end-insp pause, no flow)
+  exp.push({ p: pplat, v: vt });
+
+  // Trace downward: offset decays linearly with volume (flow → 0 as V → 0)
+  for (let i = 1; i <= steps; i++) {
+    const v = vt * (1 - i / steps);  // V from Vt down to 0
+    const flowFrac = v / vt;          // 1 at top, 0 at bottom
+    const resistiveOffset = rExp * expFlowPeak * flowFrac;
+    const p = peep + elasticP(v) - resistiveOffset;
+    exp.push({ p: Math.max(peep, p), v });
   }
 
   // Loop area = resistive work (area between insp and exp curves)
@@ -1608,6 +1619,20 @@ function ModulePVLoops() {
     ctx.stroke();
     ctx.setLineDash([]);
 
+    // Static compliance line (thin gray dashed) from (PEEP, 0) to (Pplat, Vt)
+    if (pvData.pplat !== undefined) {
+      ctx.strokeStyle = COLORS.textMuted;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 4]);
+      ctx.globalAlpha = 0.5;
+      ctx.beginPath();
+      ctx.moveTo(mapP(peep), mapV(0));
+      ctx.lineTo(mapP(pvData.pplat), mapV(vt));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+
     // Dynamic compliance slope line
     const mid = Math.floor(pvData.insp.length * 0.3);
     const top = Math.floor(pvData.insp.length * 0.7);
@@ -1627,6 +1652,16 @@ function ModulePVLoops() {
     ctx.fillText("← Insp", mapP(pvData.insp[Math.floor(pvData.insp.length * 0.5)].p) + 4, mapV(pvData.insp[Math.floor(pvData.insp.length * 0.5)].v) - 6);
     ctx.fillStyle = COLORS.orange;
     ctx.fillText("Exp →", mapP(pvData.exp[Math.floor(pvData.exp.length * 0.5)].p) - fs * 4, mapV(pvData.exp[Math.floor(pvData.exp.length * 0.5)].v) + fs + 4);
+
+    // Ppeak / Pplat labels at top of loop
+    if (pvData.ppeak !== undefined && pvData.pplat !== undefined) {
+      ctx.font = `bold ${Math.max(8, fs - 1)}px 'JetBrains Mono', monospace`;
+      ctx.fillStyle = COLORS.red;
+      ctx.textAlign = "center";
+      ctx.fillText("Ppeak", mapP(pvData.ppeak), mapV(vt) - 6);
+      ctx.fillStyle = COLORS.accent;
+      ctx.fillText("Pplat", mapP(pvData.pplat), mapV(vt) - 6);
+    }
 
     // UIP annotation
     if (alpha > 0.2) {
@@ -1685,6 +1720,8 @@ function ModulePVLoops() {
       </div>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "8px 0" }}>
+        <Metric label="Ppeak" value={pvData.ppeak.toFixed(0)} unit="cmH₂O" color={COLORS.red} />
+        <Metric label="Pplat" value={pvData.pplat.toFixed(0)} unit="cmH₂O" color={COLORS.accent} />
         <Metric label="Loop Area" value={pvData.loopArea.toFixed(0)} unit="mL·cmH₂O" color={COLORS.orange} />
         <Metric label="Dyn C" value={pvData.dynC.toFixed(0)} unit="mL/cmH₂O" color={COLORS.yellow} />
         <Metric label="PEEP" value={peep} unit="cmH₂O" color={COLORS.green} />
@@ -1698,10 +1735,11 @@ function ModulePVLoops() {
         <canvas ref={canvasRef} style={{ display: "block", borderRadius: 8, background: "#0d1117", border: `1px solid ${COLORS.cardBorder}` }} />
       </div>
 
-      <div style={{ display: "flex", gap: 12, marginTop: 8, fontSize: 11, color: COLORS.textDim, fontFamily: "'JetBrains Mono', monospace" }}>
+      <div style={{ display: "flex", gap: 12, marginTop: 8, fontSize: 11, color: COLORS.textDim, fontFamily: "'JetBrains Mono', monospace", flexWrap: "wrap" }}>
         <span><span style={{ color: COLORS.accent }}>━━</span> Inspiration</span>
         <span><span style={{ color: COLORS.orange }}>╌╌</span> Expiration</span>
-        <span><span style={{ color: COLORS.yellow }}>╌╌</span> Dyn Compliance</span>
+        <span><span style={{ color: COLORS.textMuted }}>╌╌</span> Static C</span>
+        <span><span style={{ color: COLORS.yellow }}>╌╌</span> Dyn C</span>
       </div>
     </div>
   );
