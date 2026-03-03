@@ -223,11 +223,19 @@ function generatePVLoop({ peep, vt, crs, rrs, peakFlow = 60, alpha, beta }) {
     return elasticTable[lo] * (1 - t) + elasticTable[hi] * t;
   };
 
-  // ── Inspiration: constant flow, V from 0 → Vt ──
-  // Paw = PEEP + elastic(V) + R × V̇   (resistive pressure shifts curve RIGHT)
+  // ── Visible resistance at Y-piece ──
+  // Only a fraction of R_RS creates visible pressure offset in the P-V loop
+  // (ETT and circuit resistance dominate the proximal pressure measurement)
+  const rVis = rrs * 0.35;
+
+  // ── Inspiration: V from 0 → Vt ──
+  // Flow envelope: sqrt(frac) — creates smooth rightward banana curvature
+  // Offset is 0 at V=0 (converges with exp), max at V=Vt (creates Ppeak)
   for (let i = 0; i <= steps; i++) {
-    const v = (i / steps) * vt;
-    const p = peep + elasticP(v) + rrs * flowLps;
+    const frac = i / steps;
+    const v = frac * vt;
+    const flowEnvelope = Math.pow(frac, 0.5);
+    const p = peep + elasticP(v) + rVis * flowLps * flowEnvelope;
     insp.push({ p, v });
   }
 
@@ -235,22 +243,19 @@ function generatePVLoop({ peep, vt, crs, rrs, peakFlow = 60, alpha, beta }) {
   const ppeak = insp[insp.length - 1].p;
   const pplat = peep + elasticP(vt);
 
-  // ── Expiration: P tracks the static compliance curve with a small leftward offset ──
-  // The offset represents resistive pressure during exhalation, but measured at the
-  // Y-piece (proximal to ETT), only a fraction of total R_RS is visible.
-  // Peak exp flow ≈ 50% of insp flow (longer exp time), and effective R during exp
-  // as seen by the Paw sensor ≈ 30% of R_RS (most resistance is in the ETT downstream)
-  const expFlowPeak = flowLps * 0.5;
-  const rExp = rrs * 0.3;
+  // ── Expiration: compliance curve with small leftward offset ──
+  // Mirror curvature: sqrt(v/vt) — max offset near top, zero at bottom
+  // Exp peak flow ≈ 60% of insp flow (longer exp time)
+  const expFlowPeak = flowLps * 0.6;
 
   // Start at Pplat (end-insp pause, no flow)
   exp.push({ p: pplat, v: vt });
 
-  // Trace downward: offset decays linearly with volume (flow → 0 as V → 0)
+  // Trace downward: offset follows sqrt envelope for curvature
   for (let i = 1; i <= steps; i++) {
-    const v = vt * (1 - i / steps);  // V from Vt down to 0
-    const flowFrac = v / vt;          // 1 at top, 0 at bottom
-    const resistiveOffset = rExp * expFlowPeak * flowFrac;
+    const v = vt * (1 - i / steps);
+    const flowEnvelope = Math.pow(v / vt, 0.5);
+    const resistiveOffset = rVis * expFlowPeak * flowEnvelope;
     const p = peep + elasticP(v) - resistiveOffset;
     exp.push({ p: Math.max(peep, p), v });
   }
