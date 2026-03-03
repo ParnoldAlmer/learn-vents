@@ -315,14 +315,14 @@ function Metric({ label, value, unit, color = COLORS.accent, warn }) {
 }
 
 // ─── Tab Button ───
-function TabBtn({ active, children, onClick, color = COLORS.accent }) {
+function TabBtn({ active, children, onClick, color = COLORS.accent, compact }) {
   return (
     <button onClick={onClick} style={{
-      padding: "10px 16px", borderRadius: 6, border: `1px solid ${active ? color : COLORS.cardBorder}`,
+      padding: compact ? "8px 4px" : "10px 16px", borderRadius: 6, border: `1px solid ${active ? color : COLORS.cardBorder}`,
       background: active ? `${color}22` : "transparent", color: active ? color : COLORS.textDim,
-      fontFamily: "'JetBrains Mono', monospace", fontSize: 12, fontWeight: active ? 700 : 400,
-      cursor: "pointer", transition: "all 0.2s", whiteSpace: "nowrap", flexShrink: 0,
-      minHeight: 44, display: "inline-flex", alignItems: "center",
+      fontFamily: "'JetBrains Mono', monospace", fontSize: compact ? 11 : 12, fontWeight: active ? 700 : 400,
+      cursor: "pointer", transition: "all 0.2s",
+      minHeight: 44, display: "flex", alignItems: "center", justifyContent: "center",
       WebkitTapHighlightColor: "transparent",
     }}>
       {children}
@@ -1293,6 +1293,7 @@ function ModuleQuiz() {
 // ─── MAIN APP ───
 export default function VentPhysiologyTool() {
   const [activeTab, setActiveTab] = useState("basics");
+  const isMobile = useIsMobile();
 
   const tabs = [
     { id: "basics", label: "🫁 Basics", color: COLORS.accent },
@@ -1349,15 +1350,18 @@ export default function VentPhysiologyTool() {
         </div>
       </div>
 
-      {/* Tabs — horizontally scrollable on mobile, no wrap */}
+      {/* Tabs — compact 4×2 grid on mobile, centered flex on desktop */}
       <div style={{
-        display: "flex", gap: 6,
+        display: "grid",
+        gridTemplateColumns: isMobile ? "repeat(4, 1fr)" : "repeat(8, auto)",
+        gap: 6,
         padding: "10px clamp(12px, 4vw, 24px) 4px",
-        overflowX: "auto", WebkitOverflowScrolling: "touch",
-        scrollbarWidth: "none", msOverflowStyle: "none",
+        maxWidth: isMobile ? "100%" : "min(95vw, 720px)",
+        margin: isMobile ? 0 : "0 auto",
+        justifyContent: isMobile ? undefined : "center",
       }}>
         {tabs.map(t => (
-          <TabBtn key={t.id} active={activeTab === t.id} onClick={() => setActiveTab(t.id)} color={t.color}>
+          <TabBtn key={t.id} active={activeTab === t.id} onClick={() => setActiveTab(t.id)} color={t.color} compact={isMobile}>
             {t.label}
           </TabBtn>
         ))}
