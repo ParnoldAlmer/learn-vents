@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, createContext, useContext } from "react";
 
 // ─── Constants & Helpers ───
 const COLORS = {
@@ -20,6 +20,42 @@ const COLORS = {
   textDim: "#94a3b8",
   textMuted: "#64748b",
 };
+
+// ─── Glossary Data ───
+const GLOSSARY = {
+  "PEEP": { full: "Positive End-Expiratory Pressure", detail: "Pressure maintained in airways at end of exhalation to prevent alveolar collapse." },
+  "Pplat": { full: "Plateau Pressure", detail: "Pressure measured during end-inspiratory hold. Reflects alveolar pressure. Target ≤ 30 cmH₂O." },
+  "Ppeak": { full: "Peak Airway Pressure", detail: "Highest pressure during inspiration. Includes both resistive and elastic components." },
+  "ΔP": { full: "Driving Pressure", detail: "Pplat − total PEEP. Tidal volume normalized to functional lung size. Target ≤ 14 cmH₂O." },
+  "Pres": { full: "Resistive Pressure", detail: "Ppeak − Pplat. Reflects airway resistance. Elevated with bronchospasm, mucus, kinked ETT." },
+  "Pcond": { full: "Conductive Pressure", detail: "Abrupt pressure rise at onset of insufflation before significant volume entry. Equals Pres when no auto-PEEP or AOP." },
+  "AOP": { full: "Airway Opening Pressure", detail: "Pressure at which collapsed airways open during insufflation. If present, set PEEP ≥ AOP." },
+  "PEEPi": { full: "Intrinsic PEEP (auto-PEEP)", detail: "Trapped pressure from incomplete exhalation. PEEPtot − set PEEP. Causes missed triggers and overestimated ΔP." },
+  "PEEPtot": { full: "Total PEEP", detail: "Set PEEP + intrinsic PEEP. Measured via end-expiratory hold." },
+  "C_RS": { full: "Respiratory System Compliance", detail: "Volume change per unit pressure change (mL/cmH₂O). Low in ARDS, fibrosis. Normal ~50-80." },
+  "R_RS": { full: "Respiratory System Resistance", detail: "Pressure required to generate flow (cmH₂O/L/s). High in asthma, COPD. Normal 5-10." },
+  "E_RS": { full: "Respiratory System Elastance", detail: "Inverse of compliance (1/C_RS). Higher = stiffer lungs." },
+  "Vt": { full: "Tidal Volume", detail: "Volume of gas delivered per breath. Target 6-8 mL/kg IBW." },
+  "IBW": { full: "Ideal Body Weight", detail: "Weight calculated from height and sex. Used to calculate Vt. NOT actual body weight." },
+  "RR": { full: "Respiratory Rate", detail: "Breaths per minute set on ventilator." },
+  "FiO₂": { full: "Fraction of Inspired Oxygen", detail: "Percentage of oxygen in delivered gas. Start 100%, wean to < 60%." },
+  "MP": { full: "Mechanical Power", detail: "Total energy per minute delivered to respiratory system (J/min). Threshold concern > 17 J/min." },
+  "τ": { full: "Time Constant (tau)", detail: "C_RS × R_RS in seconds. After 3τ, 95% of tidal volume is exhaled." },
+  "R/I": { full: "Recruitment-to-Inflation Ratio", detail: "Recruited volume divided by passively inflated volume during PEEP step-down. > 0.5 = high recruitability." },
+  "SI": { full: "Stress Index", detail: "Exponent b in Paw = a × time^b + c. 0.9-1.1 = linear (desired). < 0.9 = recruitment. > 1.1 = overdistension." },
+  "ACV": { full: "Assist-Control Ventilation", detail: "Mode where every breath (triggered or mandatory) gets full set volume/pressure." },
+  "VILI": { full: "Ventilator-Induced Lung Injury", detail: "Damage caused by inappropriate ventilator settings (excessive volume, pressure, or power)." },
+  "ARDS": { full: "Acute Respiratory Distress Syndrome", detail: "Acute hypoxemic respiratory failure with bilateral opacities not fully explained by cardiac failure." },
+  "SBT": { full: "Spontaneous Breathing Trial", detail: "Test of patient's ability to breathe with minimal or no vent support. Used to assess extubation readiness." },
+  "ETT": { full: "Endotracheal Tube", detail: "Tube placed in trachea for mechanical ventilation." },
+};
+
+// ─── Active Tooltip Context (singleton — only one tooltip open at a time) ───
+const ActiveTooltipContext = createContext([null, () => { }]);
+function ActiveTooltipProvider({ children }) {
+  const state = useState(null);
+  return <ActiveTooltipContext.Provider value={state}>{children}</ActiveTooltipContext.Provider>;
+}
 
 const lerp = (a, b, t) => a + (b - a) * t;
 
@@ -362,6 +398,147 @@ function Callout({ type = "info", children }) {
   );
 }
 
+// ─── Term Tooltip Component ───
+let termIdCounter = 0;
+function Term({ abbr, full, detail, children }) {
+  const glossEntry = GLOSSARY[abbr] || {};
+  const resolvedFull = full || glossEntry.full || abbr;
+  const resolvedDetail = detail || glossEntry.detail;
+  const [activeId, setActiveId] = useContext(ActiveTooltipContext);
+  const [myId] = useState(() => `term-${++termIdCounter}`);
+  const [show, setShow] = useState(false);
+  const [flipBelow, setFlipBelow] = useState(false);
+  const [animating, setAnimating] = useState(false);
+  const wrapperRef = useRef(null);
+  const hoverTimer = useRef(null);
+  const isOpen = activeId === myId && show;
+
+  // Position check: flip below if within 80px of viewport top
+  const updateFlip = useCallback(() => {
+    if (!wrapperRef.current) return;
+    const rect = wrapperRef.current.getBoundingClientRect();
+    setFlipBelow(rect.top < 80);
+  }, []);
+
+  const open = useCallback(() => {
+    updateFlip();
+    setAnimating(true);
+    setShow(true);
+    setActiveId(myId);
+    setTimeout(() => setAnimating(false), 150);
+  }, [myId, setActiveId, updateFlip]);
+
+  const close = useCallback(() => {
+    setShow(false);
+    setActiveId(prev => prev === myId ? null : prev);
+  }, [myId, setActiveId]);
+
+  // Close when another tooltip opens
+  useEffect(() => {
+    if (activeId !== myId && show) setShow(false);
+  }, [activeId, myId, show]);
+
+  // Desktop: hover with 200ms delay
+  const handleMouseEnter = useCallback(() => {
+    clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(open, 200);
+  }, [open]);
+
+  const handleMouseLeave = useCallback(() => {
+    clearTimeout(hoverTimer.current);
+    close();
+  }, [close]);
+
+  // Mobile: tap toggle
+  const handleClick = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (isOpen) close(); else open();
+  }, [isOpen, open, close]);
+
+  // Click-outside listener when open (mobile dismiss)
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleOutside = (e) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target)) close();
+    };
+    document.addEventListener("touchstart", handleOutside, true);
+    document.addEventListener("mousedown", handleOutside, true);
+    return () => {
+      document.removeEventListener("touchstart", handleOutside, true);
+      document.removeEventListener("mousedown", handleOutside, true);
+    };
+  }, [isOpen, close]);
+
+  // Cleanup timer on unmount
+  useEffect(() => () => clearTimeout(hoverTimer.current), []);
+
+  const arrowSize = 6;
+  const tooltipStyle = {
+    position: "absolute",
+    left: "50%",
+    transform: `translateX(-50%) translateY(${animating ? (flipBelow ? "4px" : "-4px") : "0"})`,
+    ...(flipBelow
+      ? { top: "100%", marginTop: arrowSize + 2 }
+      : { bottom: "100%", marginBottom: arrowSize + 2 }),
+    maxWidth: "min(280px, 90vw)",
+    background: "#1e293b",
+    border: "1px solid #334155",
+    borderRadius: 8,
+    padding: "10px 14px",
+    boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+    zIndex: 50,
+    pointerEvents: animating ? "none" : "auto",
+    opacity: animating ? 0 : 1,
+    transition: "opacity 150ms ease-out, transform 150ms ease-out",
+    whiteSpace: "normal",
+    textAlign: "left",
+  };
+
+  const arrowStyle = {
+    position: "absolute",
+    left: "50%",
+    marginLeft: -arrowSize,
+    width: 0,
+    height: 0,
+    borderLeft: `${arrowSize}px solid transparent`,
+    borderRight: `${arrowSize}px solid transparent`,
+    ...(flipBelow
+      ? { top: -arrowSize, borderBottom: `${arrowSize}px solid #1e293b` }
+      : { bottom: -arrowSize, borderTop: `${arrowSize}px solid #1e293b` }),
+  };
+
+  return (
+    <span
+      ref={wrapperRef}
+      style={{ position: "relative", display: "inline" }}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onClick={handleClick}
+    >
+      <span style={{
+        borderBottom: "1px dotted rgba(148,163,184,0.5)",
+        cursor: "help",
+      }}>
+        {children || abbr}
+      </span>
+      {isOpen && (
+        <div style={tooltipStyle}>
+          <div style={arrowStyle} />
+          <div style={{ color: "#fff", fontWeight: 700, fontSize: 12, lineHeight: 1.4 }}>
+            {resolvedFull}
+          </div>
+          {resolvedDetail && (
+            <div style={{ color: "#94a3b8", fontSize: 11, lineHeight: 1.5, marginTop: 4 }}>
+              {resolvedDetail}
+            </div>
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
 // ─── MODULES ───
 
 // ─── MODULE 0: VENT BASICS ───
@@ -414,7 +591,7 @@ function ModuleBasics() {
       {/* ── WHY VENTILATE ── */}
       {section === "why" && (
         <div>
-          <p style={bStyles.p}>A mechanical ventilator does two things: pushes air in (positive-pressure ventilation) and holds pressure at end-expiration (PEEP) to keep alveoli open. That's it. Everything else is settings and modes.</p>
+          <p style={bStyles.p}>A mechanical ventilator does two things: pushes air in (positive-pressure ventilation) and holds pressure at end-expiration (<Term abbr="PEEP">PEEP</Term>) to keep alveoli open. That's it. Everything else is settings and modes.</p>
 
           <div style={bStyles.box}>
             <div style={bStyles.boxTitle}>The Two Reasons You Intubate</div>
@@ -422,7 +599,7 @@ function ModuleBasics() {
               <div style={{ ...bStyles.miniCard, borderColor: COLORS.red + "44" }}>
                 <div style={{ color: COLORS.red, fontWeight: 700, fontSize: 13, marginBottom: 4 }}>1. Failure to Oxygenate</div>
                 <div style={{ fontSize: 11, color: COLORS.textDim, lineHeight: 1.5 }}>
-                  SpO₂ {"<"} 88% despite max supplemental O₂. The problem is V/Q mismatch or shunt — you need PEEP and FiO₂.
+                  SpO₂ {"<"} 88% despite max supplemental O₂. The problem is V/Q mismatch or shunt — you need <Term abbr="PEEP">PEEP</Term> and <Term abbr="FiO₂">FiO₂</Term>.
                 </div>
               </div>
               <div style={{ ...bStyles.miniCard, borderColor: COLORS.purple + "44" }}>
@@ -437,7 +614,7 @@ function ModuleBasics() {
           <div style={bStyles.box}>
             <div style={bStyles.boxTitle}>Common Intubation Indications</div>
             <div style={{ fontSize: 12, color: COLORS.textDim, lineHeight: 1.8, marginTop: 6 }}>
-              <span style={{ color: COLORS.accent }}>•</span> Hypoxemic respiratory failure (ARDS, pneumonia, pulmonary edema, PE)
+              <span style={{ color: COLORS.accent }}>•</span> Hypoxemic respiratory failure (<Term abbr="ARDS">ARDS</Term>, pneumonia, pulmonary edema, PE)
               <br /><span style={{ color: COLORS.accent }}>•</span> Hypercapnic respiratory failure (COPD failing NIV, status asthmaticus)
               <br /><span style={{ color: COLORS.accent }}>•</span> Airway protection (GCS ≤ 8, massive hematemesis, angioedema)
               <br /><span style={{ color: COLORS.accent }}>•</span> Anticipated clinical course (pre-procedure, expected deterioration)
@@ -461,7 +638,7 @@ function ModuleBasics() {
               { phase: "1. Trigger", desc: "What starts the breath? Either the patient (effort-triggered) or the vent (time-triggered at set RR).", color: COLORS.green, icon: "⚡" },
               { phase: "2. Inspiration", desc: "Gas flows in. The vent controls either VOLUME (fixed mL) or PRESSURE (fixed cmH₂O, flow varies). This is the key mode distinction.", color: COLORS.accent, icon: "💨" },
               { phase: "3. Cycling", desc: "What ends inspiration? Volume control: set volume reached. Pressure control: set time. Pressure support: flow drops to % of peak.", color: COLORS.yellow, icon: "🔄" },
-              { phase: "4. Expiration", desc: "Passive — lung recoils, air flows out, pressure falls to PEEP. Too short → air trapping → auto-PEEP.", color: COLORS.orange, icon: "↩️" },
+              { phase: "4. Expiration", desc: <>Passive — lung recoils, air flows out, pressure falls to <Term abbr="PEEP">PEEP</Term>. Too short → air trapping → auto-PEEP.</>, color: COLORS.orange, icon: "↩️" },
             ].map((p, i) => (
               <div key={i} style={{ ...bStyles.miniCard, borderColor: p.color + "44" }}>
                 <div style={{ fontSize: 18, marginBottom: 4 }}>{p.icon}</div>
@@ -474,11 +651,11 @@ function ModuleBasics() {
           <div style={{ ...bStyles.box, marginTop: 12 }}>
             <div style={bStyles.boxTitle}>The 3 Waveforms on Your Vent Screen</div>
             <div style={{ fontSize: 12, color: COLORS.textDim, lineHeight: 1.8, marginTop: 6 }}>
-              <span style={{ color: COLORS.accent, fontWeight: 700 }}>Pressure (Paw) vs Time</span> — Shows peak pressure, plateau, and PEEP. Shape → compliance & resistance.
+              <span style={{ color: COLORS.accent, fontWeight: 700 }}>Pressure (Paw) vs Time</span> — Shows peak pressure, plateau, and <Term abbr="PEEP">PEEP</Term>. Shape → compliance & resistance.
               <br /><br />
               <span style={{ color: COLORS.green, fontWeight: 700 }}>Flow vs Time</span> — Shows inspiratory pattern (constant in VC, decelerating in PC) and expiratory flow. Exp flow not reaching zero → auto-PEEP.
               <br /><br />
-              <span style={{ color: COLORS.purple, fontWeight: 700 }}>Volume vs Time</span> — Delivered vs exhaled Vt. Exhaled {"<"} inhaled → leak or air trapping.
+              <span style={{ color: COLORS.purple, fontWeight: 700 }}>Volume vs Time</span> — Delivered vs exhaled <Term abbr="Vt">Vt</Term>. Exhaled {"<"} inhaled → leak or air trapping.
             </div>
           </div>
         </div>
@@ -564,11 +741,11 @@ function ModuleBasics() {
             <div style={{ fontSize: 12, color: COLORS.textDim, lineHeight: 2, marginTop: 8 }}>
               <span style={{ color: COLORS.accent, fontWeight: 700 }}>1. Mode:</span> AC/VC (default)
               <br />
-              <span style={{ color: COLORS.green, fontWeight: 700 }}>2. Tidal Volume:</span> 6–8 mL/kg <strong>IBW</strong> (NOT actual weight). ARDS: start at 6. Others: 6–8.
+              <span style={{ color: COLORS.green, fontWeight: 700 }}>2. Tidal Volume:</span> 6–8 mL/kg <strong><Term abbr="IBW">IBW</Term></strong> (NOT actual weight). <Term abbr="ARDS">ARDS</Term>: start at 6. Others: 6–8.
               <br />
               <span style={{ color: COLORS.purple, fontWeight: 700 }}>3. Respiratory Rate:</span> 14–20/min. Match pre-intubation minute ventilation. Higher for metabolic acidosis.
               <br />
-              <span style={{ color: COLORS.yellow, fontWeight: 700 }}>4. PEEP:</span> Start 5 cmH₂O for most. ARDS: ARDSNet PEEP/FiO₂ table.
+              <span style={{ color: COLORS.yellow, fontWeight: 700 }}>4. PEEP:</span> Start 5 cmH₂O for most. <Term abbr="ARDS">ARDS</Term>: ARDSNet <Term abbr="PEEP">PEEP</Term>/<Term abbr="FiO₂">FiO₂</Term> table.
               <br />
               <span style={{ color: COLORS.orange, fontWeight: 700 }}>5. FiO₂:</span> Start 100%, wean rapidly to SpO₂ 92–96%. Hyperoxia is harmful.
             </div>
@@ -627,7 +804,7 @@ function ModuleBasics() {
           </EqBox>
 
           <Callout type="warn">
-            <strong>#1 resident mistake:</strong> Using actual body weight for Vt. A 150 kg patient at 170 cm has IBW ~66 kg → Vt ~400 mL, not 1000 mL. Ventilating by actual weight causes VILI.
+            <strong>#1 resident mistake:</strong> Using actual body weight for <Term abbr="Vt">Vt</Term>. A 150 kg patient at 170 cm has <Term abbr="IBW">IBW</Term> ~66 kg → <Term abbr="Vt">Vt</Term> ~400 mL, not 1000 mL. Ventilating by actual weight causes <Term abbr="VILI">VILI</Term>.
           </Callout>
         </div>
       )}
@@ -685,13 +862,13 @@ function ModuleBasics() {
           </div>
 
           <div style={bStyles.box}>
-            <div style={bStyles.boxTitle}>Ppeak vs Pplat — The Most Important Distinction</div>
+            <div style={bStyles.boxTitle}><Term abbr="Ppeak">Ppeak</Term> vs <Term abbr="Pplat">Pplat</Term> — The Most Important Distinction</div>
             <div style={{ fontSize: 12, color: COLORS.textDim, lineHeight: 1.8, marginTop: 6 }}>
-              <strong style={{ color: COLORS.red }}>High Ppeak, normal Pplat</strong> → <em>Resistive</em> problem (airways): bronchospasm, mucus plug, kinked tube, biting.
+              <strong style={{ color: COLORS.red }}>High <Term abbr="Ppeak">Ppeak</Term>, normal <Term abbr="Pplat">Pplat</Term></strong> → <em>Resistive</em> problem (airways): bronchospasm, mucus plug, kinked tube, biting.
               <br /><br />
-              <strong style={{ color: COLORS.yellow }}>Both Ppeak AND Pplat high</strong> → <em>Compliance</em> problem (lung/chest wall): PTX, pulmonary edema, ARDS, abdominal compartment syndrome, mainstem intubation.
+              <strong style={{ color: COLORS.yellow }}>Both <Term abbr="Ppeak">Ppeak</Term> AND <Term abbr="Pplat">Pplat</Term> high</strong> → <em>Compliance</em> problem (lung/chest wall): PTX, pulmonary edema, <Term abbr="ARDS">ARDS</Term>, abdominal compartment syndrome, mainstem intubation.
               <br /><br />
-              <strong style={{ color: COLORS.accent }}>To check:</strong> End-inspiratory hold (0.5–1 sec). Read Pplat. P<sub>res</sub> = Ppeak − Pplat. ΔP = Pplat − PEEP.
+              <strong style={{ color: COLORS.accent }}>To check:</strong> End-inspiratory hold (0.5–1 sec). Read <Term abbr="Pplat">Pplat</Term>. <Term abbr="Pres">P<sub>res</sub></Term> = <Term abbr="Ppeak">Ppeak</Term> − <Term abbr="Pplat">Pplat</Term>. <Term abbr="ΔP">ΔP</Term> = <Term abbr="Pplat">Pplat</Term> − <Term abbr="PEEP">PEEP</Term>.
             </div>
           </div>
 
@@ -771,7 +948,7 @@ function ModuleWaveforms() {
         Equation of Motion & ACV Waveforms
       </h3>
       <p style={{ fontSize: 12, color: COLORS.textDim, lineHeight: 1.6, margin: "0 0 12px" }}>
-        During volume-assist control ventilation (ACV) with constant inspiratory flow, the airway pressure waveform reflects the equation of motion of the respiratory system in real time.
+        During volume-assist control ventilation (<Term abbr="ACV">ACV</Term>) with constant inspiratory flow, the airway pressure waveform reflects the equation of motion of the respiratory system in real time.
       </p>
       <EqBox>P<sub>aw</sub>(t) = P₀ + R<sub>RS</sub> × V̇(t) + E<sub>RS</sub> × V(t)</EqBox>
 
@@ -801,10 +978,10 @@ function ModuleWaveforms() {
         <Metric label="MP" value={mp.toFixed(1)} unit="J/min" color={COLORS.accent} warn={mp > 17} />
       </div>
 
-      {dp > 14 && <Callout type="danger">Driving pressure {">"} 14 cmH₂O — associated with increased mortality in ARDS (Amato et al., NEJM 2015). Consider reducing Vt or increasing PEEP if recruitable lung exists.</Callout>}
-      {stressIndex < 0.95 && <Callout type="info">Stress index {"<"} 0.9 → upward convex curve → intratidal recruitment. Consider increasing PEEP.</Callout>}
-      {stressIndex > 1.05 && <Callout type="warn">Stress index {">"} 1.1 → upward concave curve → intratidal overdistension. Consider reducing PEEP or Vt.</Callout>}
-      {hasAutopeep && <Callout type="warn">Auto-PEEP detected: expiratory flow doesn't reach zero. P<sub>cond</sub> {">"} P<sub>res</sub> — perform end-expiratory hold to quantify total PEEP.</Callout>}
+      {dp > 14 && <Callout type="danger">Driving pressure {">"} 14 cmH₂O — associated with increased mortality in <Term abbr="ARDS">ARDS</Term> (Amato et al., NEJM 2015). Consider reducing <Term abbr="Vt">Vt</Term> or increasing <Term abbr="PEEP">PEEP</Term> if recruitable lung exists.</Callout>}
+      {stressIndex < 0.95 && <Callout type="info">Stress index {"<"} 0.9 → upward convex curve → intratidal recruitment. Consider increasing <Term abbr="PEEP">PEEP</Term>.</Callout>}
+      {stressIndex > 1.05 && <Callout type="warn">Stress index {">"} 1.1 → upward concave curve → intratidal overdistension. Consider reducing <Term abbr="PEEP">PEEP</Term> or <Term abbr="Vt">Vt</Term>.</Callout>}
+      {hasAutopeep && <Callout type="warn">Auto-PEEP detected: expiratory flow doesn't reach zero. <Term abbr="Pcond">P<sub>cond</sub></Term> {">"} <Term abbr="Pres">P<sub>res</sub></Term> — perform end-expiratory hold to quantify total <Term abbr="PEEP">PEEP</Term>.</Callout>}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
         <WaveformCanvas data={pressureData} yLabel="Paw (cmH₂O)" yMin={0} yMax={Math.max(ppeak + 5, 40)} color={COLORS.accent} annotations={pAnnotations} />
@@ -819,12 +996,12 @@ function ModuleWaveforms() {
 function ModulePcond() {
   const [step, setStep] = useState(0);
   const steps = [
-    { title: "1. Measure Pcond", desc: "Perform an end-inspiratory hold. Measure Pplat. Then: Pres = Ppeak − Pplat. The conductive pressure (Pcond) is the abrupt rise at the onset of insufflation before significant volume enters.", color: COLORS.accent },
-    { title: "2. Compare Pcond vs Pres", desc: "If Pcond = Pres → no intrinsic PEEP and no airway opening pressure (AOP). Normal.\nIf Pcond > Pres → either intrinsic PEEP or AOP above set PEEP is present.", color: COLORS.yellow },
-    { title: "3. If Pcond > Pres: End-Expiratory Hold", desc: "Perform an end-expiratory hold to measure total PEEP (PEEPtot).", color: COLORS.orange },
-    { title: "4a. PEEPtot > set PEEP", desc: "Intrinsic PEEP (PEEPi) is present. PEEPi = PEEPtot − set PEEP. The Pcond excess is explained by auto-PEEP. ΔP = Pplat − PEEPtot.", color: COLORS.red },
-    { title: "4b. PEEPtot = set PEEP", desc: "No auto-PEEP → Airway Opening Pressure (AOP) is present. Perform a low-flow insufflation to measure the AOP. ΔP = Pplat − AOP.", color: COLORS.purple },
-    { title: "5. Clinical Significance", desc: "When Pcond > Pres, the observed driving pressure (Ppeak − PEEP) OVERESTIMATES the actual ΔP. The true ΔP must account for PEEPi or AOP. Failure to recognize this → inappropriate ventilator settings. An AOP identified → set PEEP ≥ AOP.", color: COLORS.green },
+    { title: "1. Measure Pcond", desc: <>Perform an end-inspiratory hold. Measure <Term abbr="Pplat">Pplat</Term>. Then: <Term abbr="Pres">Pres</Term> = <Term abbr="Ppeak">Ppeak</Term> − <Term abbr="Pplat">Pplat</Term>. The conductive pressure (<Term abbr="Pcond">Pcond</Term>) is the abrupt rise at the onset of insufflation before significant volume enters.</>, color: COLORS.accent },
+    { title: "2. Compare Pcond vs Pres", desc: <>If <Term abbr="Pcond">Pcond</Term> = <Term abbr="Pres">Pres</Term> → no intrinsic <Term abbr="PEEP">PEEP</Term> and no airway opening pressure (<Term abbr="AOP">AOP</Term>). Normal.{"\n"}If <Term abbr="Pcond">Pcond</Term> {">"} <Term abbr="Pres">Pres</Term> → either intrinsic <Term abbr="PEEP">PEEP</Term> or <Term abbr="AOP">AOP</Term> above set <Term abbr="PEEP">PEEP</Term> is present.</>, color: COLORS.yellow },
+    { title: "3. If Pcond > Pres: End-Expiratory Hold", desc: <>Perform an end-expiratory hold to measure total <Term abbr="PEEP">PEEP</Term> (<Term abbr="PEEPtot">PEEPtot</Term>).</>, color: COLORS.orange },
+    { title: "4a. PEEPtot > set PEEP", desc: <>Intrinsic <Term abbr="PEEP">PEEP</Term> (<Term abbr="PEEPi">PEEPi</Term>) is present. <Term abbr="PEEPi">PEEPi</Term> = <Term abbr="PEEPtot">PEEPtot</Term> − set <Term abbr="PEEP">PEEP</Term>. The <Term abbr="Pcond">Pcond</Term> excess is explained by auto-PEEP. <Term abbr="ΔP">ΔP</Term> = <Term abbr="Pplat">Pplat</Term> − <Term abbr="PEEPtot">PEEPtot</Term>.</>, color: COLORS.red },
+    { title: "4b. PEEPtot = set PEEP", desc: <>No auto-PEEP → Airway Opening Pressure (<Term abbr="AOP">AOP</Term>) is present. Perform a low-flow insufflation to measure the <Term abbr="AOP">AOP</Term>. <Term abbr="ΔP">ΔP</Term> = <Term abbr="Pplat">Pplat</Term> − <Term abbr="AOP">AOP</Term>.</>, color: COLORS.purple },
+    { title: "5. Clinical Significance", desc: <>When <Term abbr="Pcond">Pcond</Term> {">"} <Term abbr="Pres">Pres</Term>, the observed driving pressure (<Term abbr="Ppeak">Ppeak</Term> − <Term abbr="PEEP">PEEP</Term>) OVERESTIMATES the actual <Term abbr="ΔP">ΔP</Term>. The true <Term abbr="ΔP">ΔP</Term> must account for <Term abbr="PEEPi">PEEPi</Term> or <Term abbr="AOP">AOP</Term>. Failure to recognize this → inappropriate ventilator settings. An <Term abbr="AOP">AOP</Term> identified → set <Term abbr="PEEP">PEEP</Term> ≥ <Term abbr="AOP">AOP</Term>.</>, color: COLORS.green },
   ];
 
   return (
@@ -833,7 +1010,7 @@ function ModulePcond() {
         Conductive Pressure Algorithm
       </h3>
       <p style={{ fontSize: 12, color: COLORS.textDim, lineHeight: 1.6, margin: "0 0 12px" }}>
-        Step through the clinical algorithm for interpreting conductive pressure and identifying intrinsic PEEP vs airway opening pressure.
+        Step through the clinical algorithm for interpreting conductive pressure and identifying intrinsic <Term abbr="PEEP">PEEP</Term> vs airway opening pressure.
       </p>
 
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
@@ -977,7 +1154,7 @@ function ModuleStressIndex() {
       </h3>
       <EqBox>P<sub>aw</sub> = a × time<sup>b</sup> + c &nbsp;&nbsp;→&nbsp;&nbsp; b = stress index</EqBox>
       <p style={{ fontSize: 12, color: COLORS.textDim, lineHeight: 1.6, margin: "6px 0 12px" }}>
-        The exponent <em>b</em> characterizes intratidal changes in compliance during constant-flow ACV. A value of 0.9–1.1 indicates stable compliance. Below 0.9 suggests recruitment; above 1.1 suggests overdistension.
+        The exponent <em>b</em> characterizes intratidal changes in compliance during constant-flow <Term abbr="ACV">ACV</Term>. A value of 0.9–1.1 indicates stable compliance. Below 0.9 suggests recruitment; above 1.1 suggests overdistension.
       </p>
 
       <Slider label="Stress Index (b)" value={si} min={0.6} max={1.4} step={0.01} onChange={setSi} unit="" color={info.color} />
@@ -1055,10 +1232,10 @@ function ModuleCalculator() {
         <Metric label="MP" value={mp.toFixed(1)} unit="J/min" color={COLORS.purple} warn={mp > 17} />
       </div>
 
-      {vtPerKg > 8 && <Callout type="danger">Vt/IBW {">"} 8 mL/kg — exceeds lung-protective target. Target 6–8 mL/kg IBW (ARDSNet).</Callout>}
-      {dp > 14 && <Callout type="danger">ΔP {">"} 14 cmH₂O — strongest predictor of mortality in ARDS. ΔP = Vt/C<sub>RS</sub>, reflecting tidal volume normalized to functional lung size.</Callout>}
-      {mp > 17 && <Callout type="warn">Mechanical power {">"} 17 J/min — associated with increased mortality (Costa et al., AJRCCM 2021).</Callout>}
-      {peepTot > peep && <Callout type="info">PEEPtot {">"} set PEEP: {peepTot - peep} cmH₂O of auto-PEEP. True ΔP uses PEEPtot, not set PEEP.</Callout>}
+      {vtPerKg > 8 && <Callout type="danger"><Term abbr="Vt">Vt</Term>/<Term abbr="IBW">IBW</Term> {">"} 8 mL/kg — exceeds lung-protective target. Target 6–8 mL/kg <Term abbr="IBW">IBW</Term> (ARDSNet).</Callout>}
+      {dp > 14 && <Callout type="danger"><Term abbr="ΔP">ΔP</Term> {">"} 14 cmH₂O — strongest predictor of mortality in <Term abbr="ARDS">ARDS</Term>. <Term abbr="ΔP">ΔP</Term> = <Term abbr="Vt">Vt</Term>/<Term abbr="C_RS">C<sub>RS</sub></Term>, reflecting tidal volume normalized to functional lung size.</Callout>}
+      {mp > 17 && <Callout type="warn"><Term abbr="MP">Mechanical power</Term> {">"} 17 J/min — associated with increased mortality (Costa et al., AJRCCM 2021).</Callout>}
+      {peepTot > peep && <Callout type="info"><Term abbr="PEEPtot">PEEPtot</Term> {">"} set <Term abbr="PEEP">PEEP</Term>: {peepTot - peep} cmH₂O of auto-PEEP. True <Term abbr="ΔP">ΔP</Term> uses <Term abbr="PEEPtot">PEEPtot</Term>, not set <Term abbr="PEEP">PEEP</Term>.</Callout>}
 
       <EqBox>ΔP = Pplat − PEEPtot = Vt / C<sub>RS</sub></EqBox>
       <EqBox>MP ≈ 0.098 × RR × Vt × (Ppeak − ½ΔP)</EqBox>
@@ -1083,7 +1260,7 @@ function ModuleRI() {
         Recruitment-to-Inflation (R/I) Ratio
       </h3>
       <p style={{ fontSize: 12, color: COLORS.textDim, lineHeight: 1.6, margin: "0 0 12px" }}>
-        Single-breath maneuver: after ≥10 min at high PEEP, reduce RR to ~10, then abruptly decrease PEEP (e.g., 15→5). Record the expired volume during the transition breath.
+        Single-breath maneuver: after ≥10 min at high <Term abbr="PEEP">PEEP</Term>, reduce <Term abbr="RR">RR</Term> to ~10, then abruptly decrease <Term abbr="PEEP">PEEP</Term> (e.g., 15→5). Record the expired volume during the transition breath.
       </p>
 
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
@@ -1102,9 +1279,9 @@ function ModuleRI() {
       </div>
 
       {ri > 0.5 ? (
-        <Callout type="success">R/I {">"} 0.5 → High recruitability. Higher PEEP is likely beneficial — recruited volume substantially exceeds passive inflation.</Callout>
+        <Callout type="success"><Term abbr="R/I">R/I</Term> {">"} 0.5 → High recruitability. Higher <Term abbr="PEEP">PEEP</Term> is likely beneficial — recruited volume substantially exceeds passive inflation.</Callout>
       ) : (
-        <Callout type="warn">R/I ≤ 0.5 → Low recruitability. Limited benefit from high PEEP. A low-PEEP approach is physiologically justified.</Callout>
+        <Callout type="warn"><Term abbr="R/I">R/I</Term> ≤ 0.5 → Low recruitability. Limited benefit from high <Term abbr="PEEP">PEEP</Term>. A low-PEEP approach is physiologically justified.</Callout>
       )}
     </div>
   );
@@ -1140,7 +1317,7 @@ function ModuleTimeConstant() {
       </h3>
       <EqBox>τ = C<sub>RS</sub> × R<sub>RS</sub> &nbsp;&nbsp;|&nbsp;&nbsp; V<sub>exp</sub>(t) = V<sub>T</sub> × e<sup>−t/τ</sup></EqBox>
       <p style={{ fontSize: 12, color: COLORS.textDim, lineHeight: 1.6, margin: "6px 0 12px" }}>
-        After 3τ, ~95% of tidal volume is exhaled. Insufficient expiratory time relative to τ causes dynamic hyperinflation and intrinsic PEEP.
+        After 3<Term abbr="τ">τ</Term>, ~95% of tidal volume is exhaled. Insufficient expiratory time relative to <Term abbr="τ">τ</Term> causes dynamic hyperinflation and intrinsic <Term abbr="PEEP">PEEP</Term>.
       </p>
 
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12 }}>
@@ -1157,7 +1334,7 @@ function ModuleTimeConstant() {
         <Metric label="Trapped" value={trappedVol.toFixed(0)} unit="mL" color={COLORS.red} warn={trappedVol > 50} />
       </div>
 
-      {tExp < threeT && <Callout type="warn">Expiratory time ({tExp.toFixed(1)}s) {"<"} 3τ ({threeT.toFixed(2)}s) — incomplete exhalation → dynamic hyperinflation & auto-PEEP. Flow won't reach zero before next breath.</Callout>}
+      {tExp < threeT && <Callout type="warn">Expiratory time ({tExp.toFixed(1)}s) {"<"} 3<Term abbr="τ">τ</Term> ({threeT.toFixed(2)}s) — incomplete exhalation → dynamic hyperinflation & auto-PEEP. Flow won't reach zero before next breath.</Callout>}
 
       <WaveformCanvas data={data} yLabel="Volume (mL)" yMin={0} yMax={vt + 50} color={COLORS.orange}
         annotations={[
@@ -1321,69 +1498,72 @@ export default function VentPhysiologyTool() {
   };
 
   return (
-    <div style={{
-      minHeight: "100vh", background: COLORS.bg, color: COLORS.text,
-      fontFamily: "'Space Grotesk', -apple-system, sans-serif",
-      WebkitTapHighlightColor: "transparent",
-    }}>
-      <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
-
-      {/* Header */}
+    <ActiveTooltipProvider>
       <div style={{
-        background: "linear-gradient(135deg, #0c4a6e 0%, #1e1b4b 50%, #0a0e17 100%)",
-        borderBottom: `1px solid ${COLORS.cardBorder}`,
-        padding: "clamp(14px, 4vw, 24px)",
+        minHeight: "100vh", background: COLORS.bg, color: COLORS.text,
+        fontFamily: "'Space Grotesk', -apple-system, sans-serif",
+        WebkitTapHighlightColor: "transparent",
       }}>
-        <div style={{ maxWidth: "min(95vw, 720px)", margin: "0 auto" }}>
-          <div style={{ fontSize: 10, color: COLORS.accent, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 2, marginBottom: 6 }}>
-            Interactive Teaching Tool
-          </div>
-          <h1 style={{ fontSize: "clamp(16px, 5vw, 22px)", fontWeight: 700, margin: 0, lineHeight: 1.3 }}>
-            Understanding Lung Physiology Through the Ventilator Screen
-          </h1>
-          <p style={{ fontSize: "clamp(10px, 2.5vw, 12px)", color: COLORS.textDim, margin: "6px 0 0", lineHeight: 1.5 }}>
-            Based on Carteaux, Spinelli & Jaber — <em>Intensive Care Medicine</em> 2026
-          </p>
-          <p style={{ fontSize: 10, color: COLORS.textMuted, margin: "4px 0 0" }}>
-            Basics → Advanced | Start with 🫁 Basics if you're a resident, or jump to Waveforms+ for fellow-level physiology
-          </p>
-        </div>
-      </div>
+        <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
 
-      {/* Tabs — compact 4×2 grid on mobile, centered flex on desktop */}
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: isMobile ? "repeat(4, 1fr)" : "repeat(8, auto)",
-        gap: 6,
-        padding: "10px clamp(12px, 4vw, 24px) 4px",
-        maxWidth: isMobile ? "100%" : "min(95vw, 720px)",
-        margin: isMobile ? 0 : "0 auto",
-        justifyContent: isMobile ? undefined : "center",
-      }}>
-        {tabs.map(t => (
-          <TabBtn key={t.id} active={activeTab === t.id} onClick={() => setActiveTab(t.id)} color={t.color} compact={isMobile}>
-            {t.label}
-          </TabBtn>
-        ))}
-      </div>
-
-      {/* Content */}
-      <div style={{
-        maxWidth: "min(95vw, 720px)", margin: "0 auto",
-        padding: `0 clamp(12px, 4vw, 24px) 40px`,
-      }}>
+        {/* Header */}
         <div style={{
-          background: COLORS.card, border: `1px solid ${COLORS.cardBorder}`,
-          borderRadius: 12, padding: "clamp(14px, 4vw, 20px)", marginTop: 8,
+          background: "linear-gradient(135deg, #0c4a6e 0%, #1e1b4b 50%, #0a0e17 100%)",
+          borderBottom: `1px solid ${COLORS.cardBorder}`,
+          padding: "clamp(14px, 4vw, 24px)",
         }}>
-          {renderModule()}
+          <div style={{ maxWidth: "min(95vw, 720px)", margin: "0 auto" }}>
+            <div style={{ fontSize: 10, color: COLORS.accent, fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: 2, marginBottom: 6 }}>
+              Interactive Teaching Tool
+            </div>
+            <h1 style={{ fontSize: "clamp(16px, 5vw, 22px)", fontWeight: 700, margin: 0, lineHeight: 1.3 }}>
+              Understanding Lung Physiology Through the Ventilator Screen
+            </h1>
+            <p style={{ fontSize: "clamp(10px, 2.5vw, 12px)", color: COLORS.textDim, margin: "6px 0 0", lineHeight: 1.5 }}>
+              Based on Carteaux, Spinelli & Jaber — <em>Intensive Care Medicine</em> 2026
+            </p>
+            <p style={{ fontSize: 10, color: COLORS.textMuted, margin: "4px 0 0" }}>
+              Basics → Advanced | Start with 🫁 Basics if you're a resident, or jump to Waveforms+ for fellow-level physiology
+            </p>
+          </div>
         </div>
 
-        <p style={{ fontSize: 10, color: COLORS.textMuted, textAlign: "center", marginTop: 16, lineHeight: 1.6 }}>
-          Educational tool for resident training. Not for clinical decision-making.
-          <br />Content derived from Carteaux G, Spinelli E, Jaber S. ICM 2026. doi:10.1007/s00134-026-08341-5
-        </p>
+        {/* Tabs — compact 4×2 grid on mobile, centered flex on desktop */}
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: isMobile ? "repeat(4, 1fr)" : "repeat(8, auto)",
+          gap: 6,
+          padding: "10px clamp(12px, 4vw, 24px) 4px",
+          maxWidth: isMobile ? "100%" : "min(95vw, 720px)",
+          margin: isMobile ? 0 : "0 auto",
+          justifyContent: isMobile ? undefined : "center",
+        }}>
+          {tabs.map(t => (
+            <TabBtn key={t.id} active={activeTab === t.id} onClick={() => setActiveTab(t.id)} color={t.color} compact={isMobile}>
+              {t.label}
+            </TabBtn>
+          ))}
+        </div>
+
+        {/* Content */}
+        <div style={{
+          maxWidth: "min(95vw, 720px)", margin: "0 auto",
+          padding: `0 clamp(12px, 4vw, 24px) 40px`,
+        }}>
+          <div style={{
+            background: COLORS.card, border: `1px solid ${COLORS.cardBorder}`,
+            borderRadius: 12, padding: "clamp(14px, 4vw, 20px)", marginTop: 8,
+            overflow: "visible",
+          }}>
+            {renderModule()}
+          </div>
+
+          <p style={{ fontSize: 10, color: COLORS.textMuted, textAlign: "center", marginTop: 16, lineHeight: 1.6 }}>
+            Educational tool for resident training. Not for clinical decision-making.
+            <br />Content derived from Carteaux G, Spinelli E, Jaber S. ICM 2026. doi:10.1007/s00134-026-08341-5
+          </p>
+        </div>
       </div>
-    </div>
+    </ActiveTooltipProvider>
   );
 }
