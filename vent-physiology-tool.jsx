@@ -208,9 +208,8 @@ function generatePVLoop({ peep, vt, crs, rrs, peakFlow = 60, alpha, beta }) {
   };
 
   // Shared elastic pressure via cumulative integration of dv/C_eff(v)
-  // Precompute a lookup table so both limbs use identical elastic pressure
   const elasticSteps = 200;
-  const elasticTable = new Float64Array(elasticSteps + 1); // elasticTable[i] = elastic P at v = (i/N)*vt
+  const elasticTable = new Float64Array(elasticSteps + 1);
   elasticTable[0] = 0;
   for (let i = 1; i <= elasticSteps; i++) {
     const v = (i / elasticSteps) * vt;
@@ -225,33 +224,27 @@ function generatePVLoop({ peep, vt, crs, rrs, peakFlow = 60, alpha, beta }) {
   };
 
   // ── Inspiration: constant flow, V from 0 → Vt ──
-  // P = PEEP + elastic(V) + R × V̇  (V̇ > 0, resistive adds pressure)
+  // Paw = PEEP + elastic(V) + R × V̇   (resistive pressure shifts curve RIGHT)
   for (let i = 0; i <= steps; i++) {
     const v = (i / steps) * vt;
     const p = peep + elasticP(v) + rrs * flowLps;
     insp.push({ p, v });
   }
 
-  // ── Expiration: passive decay, V from Vt → 0 ──
-  // V(t) = Vt × e^(−t/τ), V̇(t) = −V(t)/τ  (flow is negative)
-  // P = PEEP + elastic(V) + R × V̇ = PEEP + elastic(V) − R × V/(τ×1000)
-  // The negative resistive term pulls pressure LEFT of the static curve → creates the loop
-  const tauS = (crs / 1000) * rrs; // time constant in seconds
+  // ── End-inspiratory pause: Ppeak drops to Pplat at constant Vt ──
+  const ppeak = insp[insp.length - 1].p;
+  const pplat = peep + elasticP(vt);
+
+  // ── Expiration: follows the static compliance curve from (Pplat, Vt) → (PEEP, 0) ──
+  // Paw ≈ PEEP + elastic(V)  (the compliance line — no resistive component)
+  // This is the standard clinical P-V loop: expiration traces the compliance curve
   for (let i = 0; i <= steps; i++) {
-    const frac = i / steps;
-    const v = vt * Math.exp(-4 * frac);
-    if (v < 0.5) { exp.push({ p: peep, v: 0 }); break; } // close loop at origin
-    const flowExp = -(v / 1000) / tauS; // L/s, negative
-    const p = peep + elasticP(v) + rrs * flowExp;
+    const v = vt * (1 - i / steps);
+    const p = peep + elasticP(v);
     exp.push({ p, v });
   }
-  // Ensure final point closes at (PEEP, 0)
-  if (exp.length === 0 || exp[exp.length - 1].v > 0) {
-    exp.push({ p: peep, v: 0 });
-  }
 
-  // Loop area via trapezoidal rule (hysteresis = area between the two curves)
-  // Integrate P·dV for each limb; loop area = insp integral − exp integral
+  // Loop area = resistive work (area between insp and exp curves)
   let areaInsp = 0;
   for (let i = 1; i < insp.length; i++) {
     areaInsp += 0.5 * (insp[i].p + insp[i - 1].p) * (insp[i].v - insp[i - 1].v);
@@ -267,7 +260,7 @@ function generatePVLoop({ peep, vt, crs, rrs, peakFlow = 60, alpha, beta }) {
   const top = Math.floor(steps * 0.7);
   const dynC = (insp[top].v - insp[mid].v) / (insp[top].p - insp[mid].p);
 
-  return { insp, exp, loopArea, dynC };
+  return { insp, exp, loopArea, dynC, ppeak, pplat };
 }
 
 // ─── Breath Animation Hook ───
@@ -1575,12 +1568,14 @@ function ModulePVLoops() {
       ctx.fillText(Math.round(val), mapP(val), ch - padB + fs * 1.3);
     }
 
-    // Filled loop area (subtle)
+    // Filled loop area (subtle) — includes end-insp pause connecting line
     ctx.globalAlpha = 0.08;
     ctx.fillStyle = COLORS.accent;
     ctx.beginPath();
     pvData.insp.forEach((d, i) => { const x = mapP(d.p), y = mapV(d.v); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
-    [...pvData.exp].reverse().forEach((d) => { ctx.lineTo(mapP(d.p), mapV(d.v)); });
+    // End-insp pause: horizontal line from Ppeak to Pplat at V=Vt
+    if (pvData.pplat !== undefined) ctx.lineTo(mapP(pvData.pplat), mapV(vt));
+    pvData.exp.forEach((d) => { ctx.lineTo(mapP(d.p), mapV(d.v)); });
     ctx.closePath();
     ctx.fill();
     ctx.globalAlpha = 1;
@@ -1591,6 +1586,18 @@ function ModulePVLoops() {
     ctx.beginPath();
     pvData.insp.forEach((d, i) => { const x = mapP(d.p), y = mapV(d.v); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
     ctx.stroke();
+
+    // End-inspiratory pause line (Ppeak → Pplat at Vt) — thin solid line
+    if (pvData.ppeak !== undefined && pvData.pplat !== undefined) {
+      ctx.strokeStyle = COLORS.textMuted;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 2]);
+      ctx.beginPath();
+      ctx.moveTo(mapP(pvData.ppeak), mapV(vt));
+      ctx.lineTo(mapP(pvData.pplat), mapV(vt));
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
 
     // Expiration limb (dashed)
     ctx.strokeStyle = COLORS.orange;
