@@ -48,7 +48,9 @@ const GLOSSARY = {
   "ARDS": { full: "Acute Respiratory Distress Syndrome", detail: "Acute hypoxemic respiratory failure with bilateral opacities not fully explained by cardiac failure." },
   "SBT": { full: "Spontaneous Breathing Trial", detail: "Test of patient's ability to breathe with minimal or no vent support. Used to assess extubation readiness." },
   "ETT": { full: "Endotracheal Tube", detail: "Tube placed in trachea for mechanical ventilation." },
-  "ICU": { full: "Intensive Care Unit", detail: "Hospital unit providing continuous monitoring and life-support for critically ill patients." },
+  "Resistance": { full: "Airway Resistance", detail: "Opposition to airflow in the conducting airways (cmH₂O/L/s). Increased by bronchospasm, secretions, narrow ETT, or kinked tubing. Seen as wider P-V loop and elevated Ppeak − Pplat." },
+  "Overdistension": { full: "Alveolar Overdistension", detail: "Excessive stretching of alveoli at high volumes/pressures. P-V loop shows upper flattening (beak). Raises VILI risk. Reduce Vt or PEEP." },
+  "Air Trapping": { full: "Air Trapping (Auto-PEEP)", detail: "Incomplete exhalation before next breath causes gas to accumulate. P-V loop fails to return to baseline. Common in COPD/asthma. Increase expiratory time or reduce RR." },
   "PaCO₂": { full: "Partial Pressure of Arterial CO₂", detail: "Normal 35-45 mmHg. Reflects adequacy of ventilation (minute ventilation)." },
   "PaO₂": { full: "Partial Pressure of Arterial O₂", detail: "Normal 80-100 mmHg on room air. Reflects oxygenation." },
   "SpO₂": { full: "Peripheral Oxygen Saturation", detail: "Pulse oximetry reading. Target 92-96% in most ventilated patients." },
@@ -1984,7 +1986,7 @@ function ModulePVLoops() {
         📊 P-V Loops
       </h3>
       <p style={{ fontSize: 12, color: COLORS.textDim, lineHeight: 1.6, margin: "0 0 14px" }}>
-        P-V loops are displayed in real-time on every modern <Term abbr="ICU">ICU</Term> ventilator. The shape tells you <Term abbr="C_RS">compliance</Term>, resistance, overdistension, and air trapping at a glance — without ordering any tests. Board favorite: identifying the pathology from the loop shape.
+        P-V loops are displayed in real-time on every modern ventilator. The shape tells you <Term abbr="C_RS">compliance</Term>, <Term abbr="Resistance">resistance</Term>, <Term abbr="Overdistension">overdistension</Term>, and <Term abbr="Air Trapping">air trapping</Term> at a glance — without ordering any tests. Board favorite: identifying the pathology from the loop shape.
       </p>
 
       {/* ── Board Patterns ── */}
