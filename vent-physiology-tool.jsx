@@ -2483,52 +2483,129 @@ function ModuleQuiz() {
       opts: ["27 cmH₂O", "20 cmH₂O", "7 cmH₂O", "35 cmH₂O"],
       correct: 1,
       explain: "ΔP = Pplat − PEEP = 28 − 8 = 20 cmH₂O. Note: ΔP uses Pplat (not Ppeak) and total PEEP.",
+      category: "Basics",
     },
     {
       q: "Stress index of 0.75 on the pressure-time curve during ACV suggests:",
       opts: ["Overdistension — decrease PEEP", "Stable compliance — no change needed", "Intratidal recruitment — consider increasing PEEP", "Auto-PEEP — increase expiratory time"],
       correct: 2,
       explain: "SI < 0.9 → convex upward curve → compliance increasing during insufflation (recruitment). Consider ↑ PEEP.",
+      category: "Waveforms",
     },
     {
       q: "Pcond > Pres on the airway pressure waveform. End-expiratory hold shows PEEPtot = set PEEP. What is present?",
       opts: ["Intrinsic PEEP", "Airway Opening Pressure (AOP)", "Normal mechanics", "Circuit leak"],
       correct: 1,
       explain: "Pcond > Pres with PEEPtot = set PEEP → no auto-PEEP → airway closure with AOP above PEEP. Perform low-flow insufflation to measure AOP. Set PEEP ≥ AOP.",
+      category: "Waveforms",
     },
     {
       q: "After 3 time constants (3τ), approximately what percentage of tidal volume has been exhaled?",
       opts: ["63%", "86%", "95%", "99%"],
       correct: 2,
       explain: "1τ ≈ 63%, 2τ ≈ 86%, 3τ ≈ 95%, 5τ ≈ 99%. When expiratory time < 3τ, dynamic hyperinflation occurs.",
+      category: "Basics",
     },
     {
       q: "R/I ratio of 0.3 after a single-breath PEEP decrement maneuver suggests:",
       opts: ["High recruitability — high PEEP beneficial", "Low recruitability — low PEEP approach justified", "Measurement error — repeat the maneuver", "Need for prone positioning first"],
       correct: 1,
       explain: "R/I ≤ 0.5 → limited recruitable lung → high PEEP provides more overdistension than recruitment. Low-PEEP strategy is physiologically appropriate.",
+      category: "R/I Ratio",
     },
     {
       q: "A patient has ΔP 12, RR 20, Vt 400 mL, Ppeak 30. Approximate mechanical power?",
       opts: ["~9.4 J/min", "~18.8 J/min", "~12.0 J/min", "~24.0 J/min"],
-      correct: 0,
+      correct: 1,
       explain: "MP ≈ 0.098 × 20 × 0.4 × (30 − 0.5×12) = 0.098 × 20 × 0.4 × 24 = 18.816 → ~18.8 J/min. Actually, let's recalculate: 0.098 × 20 × 0.4 = 0.784. × 24 = 18.8 J/min. The correct answer is ~18.8.",
+      category: "ΔP & MP",
     },
     {
       q: "A patient on ACV with ARDS has a P-V loop showing marked flattening at high volumes, with no concavity at low volumes. This pattern suggests:",
       opts: ["High recruitability — increase PEEP", "Overdistension — consider reducing Vt or PEEP", "Normal P-V relationship — no changes needed", "Auto-PEEP — increase expiratory time"],
       correct: 1,
       explain: "Flattening at high volumes = upper inflection point (UIP) = overdistension. The lung is being stretched beyond its elastic limit. With no LIP concavity (no recruitment), this is a 'stiff lung' pattern — reduce Vt or PEEP.",
+      category: "P-V Loop",
     },
     {
       q: "You increase PEEP from 8 to 16 cmH₂O. On the recruitment animation, the percentage of transitional acini decreases sharply but the recruited percentage is now 85%. What is the main risk?",
       opts: ["Atelectrauma from cyclic R/D", "Volutrauma from overdistending already-open acini", "Decreased cardiac output only", "No significant risk — higher PEEP is always better"],
       correct: 1,
       explain: "At 85% recruitment with high PEEP, most acini are open and receiving tidal volume. The transitional zone shrank (good — less atelectrauma), but now the dominant risk is volutrauma: the already-open tissue is being overdistended. This is why the 'optimal' pressure is NOT 100% recruitment.",
+      category: "Recruitment",
+    },
+    // ── New questions (9–18) ──
+    {
+      q: "A 62yo woman on ACV (Vt 350, RR 18, PEEP 10, FiO₂ 60%) has Ppeak 42 and Pplat 38. The most appropriate next step is:",
+      opts: ["Suction the ETT", "Decrease tidal volume", "Administer albuterol nebulizer", "Increase PEEP to recruit lung"],
+      correct: 1,
+      explain: "Both Ppeak AND Pplat are elevated → compliance problem (not resistance). Pres = 42−38 = 4 (normal). Pplat 38 exceeds the 30 cmH₂O safety target. Reducing Vt lowers Pplat and driving pressure. Suctioning and albuterol treat resistance (normal here). More PEEP would worsen overdistension.",
+      category: "Basics",
+    },
+    {
+      q: "A patient with severe asthma on ACV suddenly becomes hypotensive. Ppeak is 55, Pplat is 18. The ventilator shows expiratory flow not returning to zero. The best intervention is:",
+      opts: ["Increase PEEP to match auto-PEEP", "Disconnect from ventilator and allow full exhalation", "Give IV fluid bolus", "Increase respiratory rate to improve ventilation"],
+      correct: 1,
+      explain: "Classic auto-PEEP with hemodynamic compromise. Ppeak 55 with Pplat 18 = massive resistance (asthma). Exp flow not reaching zero = air trapping. The trapped volume acts like a PEEP of 30+ cmH₂O, compressing the vena cava and dropping preload. Disconnecting allows full exhalation and immediately restores venous return. Increasing RR would worsen trapping. Fluids are temporizing but don't fix the cause.",
+      category: "Basics",
+    },
+    {
+      q: "A patient on ACV has Pplat 22, PEEP 12, PEEPtot 12. The driving pressure is 10 cmH₂O. You increase PEEP to 16. New Pplat is 24, PEEPtot 16. The new driving pressure is:",
+      opts: ["12 cmH₂O", "8 cmH₂O", "10 cmH₂O", "24 cmH₂O"],
+      correct: 1,
+      explain: "ΔP = Pplat − PEEPtot = 24 − 16 = 8 cmH₂O. Driving pressure DECREASED from 10 to 8, meaning compliance improved with higher PEEP (recruited lung made more alveoli available). This is a sign that the PEEP increase was beneficial — the lung is more recruitable. If ΔP had stayed the same or increased, the PEEP increase mainly overdistended without recruiting.",
+      category: "ΔP & MP",
+    },
+    {
+      q: "You are called to the bedside because the ventilator high-pressure alarm is sounding. The patient was recently repositioned. Ppeak is elevated but you cannot obtain a Pplat. The most likely cause is:",
+      opts: ["Pneumothorax", "Mucus plug with complete airway obstruction", "Right mainstem intubation", "ARDS progression"],
+      correct: 1,
+      explain: "Inability to obtain a Pplat (no plateau during end-inspiratory hold) suggests complete or near-complete airway obstruction — no gas can equilibrate. A mucus plug with complete obstruction after repositioning is the most likely culprit. Mainstem intubation is possible after repositioning but would still allow a Pplat to be measured. PTX and ARDS would elevate both Ppeak and Pplat but wouldn't prevent obtaining a plateau.",
+      category: "Waveforms",
+    },
+    {
+      q: "A 70 kg male (height 178 cm) is intubated for COPD exacerbation. Initial vent settings should prioritize:",
+      opts: ["High Vt (10 mL/kg) and high RR (20) to rapidly correct the hypercapnia", "Low Vt (6 mL/kg), low RR (10-12), and prolonged expiratory time", "Low Vt (6 mL/kg) and high PEEP (15) for lung recruitment", "High Vt (8 mL/kg), moderate RR (16), and high PEEP (10)"],
+      correct: 1,
+      explain: "COPD = high resistance + air trapping. Priority is allowing complete exhalation: low RR (10-12) gives a long expiratory time (3-4× the time constant). Vt 6-8 mL/kg IBW is appropriate. PEEP should be low (≤5) or matched to measured auto-PEEP. High RR or high PEEP would worsen dynamic hyperinflation. Rapidly correcting chronic hypercapnia risks post-hypercapnic alkalosis.",
+      category: "Basics",
+    },
+    {
+      q: "An ARDS patient on ACV (Vt 360, RR 28, PEEP 14, FiO₂ 80%) has pH 7.18, PaCO₂ 62. The appropriate response is:",
+      opts: ["Increase Vt to 500 mL to improve CO₂ clearance", "Increase RR to 35 breaths/min", "Accept the respiratory acidosis and continue current settings", "Switch to pressure control ventilation"],
+      correct: 2,
+      explain: "This is permissive hypercapnia. In ARDS, lung-protective ventilation (6 mL/kg IBW) is prioritized over normalizing pH. pH 7.18 is below the commonly tolerated threshold (~7.20), but the answer is still to tolerate it rather than increase Vt above 6-8 mL/kg IBW, which causes VILI. RR 28 is already high — going to 35 risks auto-PEEP. If pH drops below 7.15, consider bicarbonate infusion rather than abandoning lung protection. Increasing Vt to 500 mL (>8 mL/kg) would worsen VILI.",
+      category: "Basics",
+    },
+    {
+      q: "A patient meets extubation criteria (FiO₂ 35%, PEEP 5, pH 7.38). The nursing team asks whether to start weaning by gradually reducing SIMV rate from 14 to 8 over 48 hours. Your response should be:",
+      opts: ["Agree — SIMV weaning is evidence-based", "Disagree — perform a spontaneous breathing trial now", "Disagree — switch to pressure support and gradually wean", "Agree, but also reduce pressure support simultaneously"],
+      correct: 1,
+      explain: "The patient already meets extubation criteria. SIMV weaning is inferior to SBT-based protocols — evidence consistently shows longer time to liberation with SIMV. The correct approach: perform a paired SAT (hold sedation) + SBT (T-piece or low PS for 30-120 min). If passed, extubate. Gradual SIMV reduction delays extubation unnecessarily.",
+      category: "Basics",
+    },
+    {
+      q: "On the waveform display, you notice the pressure-time curve during constant-flow ACV shows an upward concavity in the latter half of inspiration (the curve bends upward). This suggests:",
+      opts: ["Intratidal recruitment — consider increasing PEEP", "Intratidal overdistension — consider reducing Vt or PEEP", "Normal linear compliance — no changes needed", "Auto-PEEP — increase expiratory time"],
+      correct: 1,
+      explain: "Upward concavity = stress index > 1.1 = compliance is DECREASING during the breath (the lung is getting stiffer as you inflate). This is overdistension. The lung has reached its elastic limit partway through inspiration. Reduce Vt or PEEP. Recruitment would show the opposite pattern — downward convexity (stress index < 0.9), meaning compliance is improving during the breath.",
+      category: "Waveforms",
+    },
+    {
+      q: "A patient has C_RS 25 mL/cmH₂O and R_RS 18 cmH₂O/L/s. The time constant (τ) is 0.45 seconds. The RR is set at 22 with I:E ratio 1:2. Is expiratory time adequate?",
+      opts: ["Yes — expiratory time exceeds 3τ", "No — expiratory time is less than 3τ, risk of auto-PEEP", "Cannot determine without knowing the tidal volume", "τ calculation is incorrect for these values"],
+      correct: 0,
+      explain: "At RR 22, total breath cycle = 60/22 = 2.73 seconds. With I:E of 1:2, expiratory time = 2.73 × (2/3) = 1.82 seconds. 3τ = 3 × 0.45 = 1.35 seconds. Expiratory time (1.82s) > 3τ (1.35s), so 95% of Vt should be exhaled. This is adequate. However, it's close — if RR increases to 28, exp time drops to 1.43s which barely exceeds 3τ. Note: τ = C_RS × R_RS = 0.025 L/cmH₂O × 18 = 0.45s ✓.",
+      category: "Time Constant",
+    },
+    {
+      q: "You perform a PEEP decrement maneuver (15 → 5 cmH₂O) and measure R/I ratio of 0.7. This result supports which management strategy?",
+      opts: ["Use low PEEP (≤8) — the lung has limited recruitable tissue", "Use high PEEP (≥12) — significant recruitable lung is present", "The R/I ratio is uninterpretable at this PEEP step size", "Prone positioning is required before PEEP titration"],
+      correct: 1,
+      explain: "R/I > 0.5 = high recruitability. The volume gained from recruitment during the PEEP step-down substantially exceeds passive inflation. This means the lung has significant recruitable tissue that benefits from higher PEEP. Maintain PEEP ≥12 or higher. R/I ≤ 0.5 would support a low-PEEP strategy (most PEEP increase causes overdistension, not recruitment).",
+      category: "R/I Ratio",
     },
   ];
-  // Fix Q6 — swap correct answer
-  questions[5].correct = 1;
 
   const [current, setCurrent] = useState(0);
   const [selected, setSelected] = useState(null);
@@ -2567,9 +2644,19 @@ function ModuleQuiz() {
 
       <div style={{
         background: "#0d1117", border: `1px solid ${COLORS.cardBorder}`, borderRadius: 10,
-        padding: 16, marginBottom: 12, fontSize: 14, color: COLORS.text, lineHeight: 1.6,
+        padding: 16, marginBottom: 12,
       }}>
-        {q.q}
+        {q.category && (
+          <div style={{
+            fontSize: 10, color: COLORS.accent, fontFamily: "'JetBrains Mono', monospace",
+            textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 6, opacity: 0.8,
+          }}>
+            {q.category}
+          </div>
+        )}
+        <div style={{ fontSize: 14, color: COLORS.text, lineHeight: 1.6 }}>
+          {q.q}
+        </div>
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
