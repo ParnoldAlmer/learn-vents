@@ -57,6 +57,7 @@ const GLOSSARY = {
   "SIMV": { full: "Synchronized Intermittent Mandatory Ventilation", detail: "Mode delivering set mandatory breaths synchronized to patient effort; spontaneous breaths receive PS only." },
   "SAT": { full: "Spontaneous Awakening Trial", detail: "Protocolized daily sedation hold to assess wakefulness. Paired with SBT to reduce vent days." },
   "PE": { full: "Pulmonary Embolism", detail: "Blood clot in pulmonary vasculature. Common cause of unexplained tachypnea and hypoxemia." },
+  "ECMO": { full: "Extracorporeal Membrane Oxygenation", detail: "External circuit providing gas exchange when the lungs cannot. VV-ECMO for respiratory failure, VA-ECMO for cardiac failure. Consider after prone positioning fails in severe ARDS." },
 };
 
 // ─── Active Tooltip Context (singleton — only one tooltip open at a time) ───
@@ -1109,6 +1110,10 @@ function ModuleBasics() {
 
           <Callout type="info">
             <strong>Ready to Extubate?</strong> Criteria to consider: <Term abbr="SpO₂">SpO₂</Term> {">"}90% on <Term abbr="FiO₂">FiO₂</Term> ≤0.5, <Term abbr="PEEP">PEEP</Term> ≤5, pH {">"}7.30, and underlying cause improving. Best practice: pair daily <Term abbr="SAT">SAT</Term> (spontaneous awakening trial — hold sedation) with <Term abbr="SBT">SBT</Term> (spontaneous breathing trial — minimal vent support). This <Term abbr="SAT">SAT</Term>+<Term abbr="SBT">SBT</Term> combination reduces vent days, ICU stay, and 1-year mortality.
+          </Callout>
+
+          <Callout type="info">
+            <strong>Prone Positioning in <Term abbr="ARDS">ARDS</Term></strong> When lung-protective ventilation alone isn't enough: if P/F ratio remains {"<"}150 after 12–24 hours of optimized settings (<Term abbr="FiO₂">FiO₂</Term> ≥0.6, <Term abbr="PEEP">PEEP</Term> ≥5), initiate prone positioning for ≥16 hours/day. PROSEVA trial (Guérin et al., NEJM 2013) showed 28-day mortality 16% vs 33% (NNT ~6) in severe <Term abbr="ARDS">ARDS</Term>. Continue until sustained oxygenation improvement. This is the single most impactful rescue intervention in severe <Term abbr="ARDS">ARDS</Term> after lung-protective ventilation itself. Board pearl: if they describe a patient with <Term abbr="ARDS">ARDS</Term> on appropriate settings who remains severely hypoxemic → the answer is prone, not <Term abbr="ECMO">ECMO</Term> (<Term abbr="ECMO">ECMO</Term> is after proning fails).
           </Callout>
 
           <Callout type="warn">
