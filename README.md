@@ -1,6 +1,6 @@
 # Learn Vents
 
-An interactive educational tool for teaching mechanical ventilation physiology to medical residents and ICU fellows. Built to bridge the gap between clinical ventilator settings and underlying lung physiology.
+An interactive educational tool for teaching mechanical ventilation physiology to residents and fellows. Built to bridge the gap between clinical ventilator settings and underlying lung physiology.
 
 Based on concepts from Carteaux, Spinelli & Jaber — *Intensive Care Medicine* (2026).
 
